@@ -23,6 +23,7 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
     );
 
     let app = Router::new()
+        .route("/", get(root))
         .route("/files", post(upload_file))
         .route("/files/{name}", get(download_file).delete(delete_file))
         .route("/files/{name}/info", get(file_info))
@@ -71,6 +72,23 @@ struct StatsResponse {
 #[derive(Serialize)]
 struct ErrorResponse {
     error: String,
+}
+
+async fn root(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
+    let service = state.service.lock().await;
+    let s = service.stats().await?;
+    Ok(Json(serde_json::json!({
+        "service": "hugrs",
+        "version": env!("CARGO_PKG_VERSION"),
+        "hf_endpoint": state.config.huggingface.endpoint,
+        "stats": {
+            "repos": s.repo_count,
+            "files": s.file_count,
+            "trunks": s.trunk_count,
+            "total_size": s.total_size,
+            "unique_size": s.unique_size
+        }
+    })))
 }
 
 async fn upload_file(
