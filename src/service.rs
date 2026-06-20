@@ -100,12 +100,29 @@ impl CacheService {
         }
 
         let head = self.http_client.head(url).send().await?;
-        let total_size: u64 = head
-            .headers()
+        let headers = head.headers();
+        let total_size: u64 = headers
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok())
             .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+
+        let etag = headers
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let x_repo_commit = headers
+            .get("x-repo-commit")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let x_linked_size = headers
+            .get("x-linked-size")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        let x_linked_etag = headers
+            .get("x-linked-etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
         if total_size <= CHUNK_SIZE as u64 {
             tracing::info!(
@@ -114,7 +131,15 @@ impl CacheService {
                 total_size
             );
             let data = self.http_client.get(url).send().await?.bytes().await?;
-            return self.upload(name, repo, data.to_vec()).await;
+            self.upload(name, repo, data.to_vec()).await?;
+            self.metadata.set_file_headers(
+                name,
+                etag.as_deref(),
+                x_repo_commit.as_deref(),
+                x_linked_size,
+                x_linked_etag.as_deref(),
+            )?;
+            return Ok(());
         }
 
         tracing::info!(
@@ -189,6 +214,14 @@ impl CacheService {
         }
 
         self.metadata.touch_repo(repo)?;
+
+        self.metadata.set_file_headers(
+            name,
+            etag.as_deref(),
+            x_repo_commit.as_deref(),
+            x_linked_size,
+            x_linked_etag.as_deref(),
+        )?;
 
         if let Some(limit) = self.max_size {
             self.evict_if_needed(limit).await?;

@@ -1,20 +1,23 @@
 use crate::config::Config;
+use crate::hf;
 use crate::service::CacheService;
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
+    let http_client = hf::build_client(&config)?;
     let app_state = AppState {
         service: Arc::new(Mutex::new(service)),
         config: Arc::new(config),
+        http_client: Arc::new(http_client),
     };
 
     let addr = format!(
@@ -24,11 +27,19 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(root))
-        .route("/files", post(upload_file))
-        .route("/files/{name}", get(download_file).delete(delete_file))
-        .route("/files/{name}/info", get(file_info))
-        .route("/files/pull", post(pull_model))
-        .route("/stats", get(stats))
+        .route("/api/whoami-v2", get(whoami))
+        .route(
+            "/api/models/{org}/{repo}/revision/{revision}",
+            get(model_info_revision).head(model_info_revision),
+        )
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            get(file_resolve).head(file_resolve),
+        )
+        .route(
+            "/api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{*path}",
+            get(resolve_cache).head(resolve_cache),
+        )
         .with_state(app_state);
 
     tracing::info!("Listening on {}", addr);
@@ -41,32 +52,7 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
 struct AppState {
     service: Arc<Mutex<CacheService>>,
     config: Arc<Config>,
-}
-
-#[derive(Deserialize)]
-struct PullRequest {
-    repo: String,
-    #[serde(default)]
-    file: Option<String>,
-}
-
-#[derive(Serialize)]
-struct FileInfoResponse {
-    name: String,
-    repo: String,
-    total_size: i64,
-    created_at: String,
-    last_accessed: String,
-    source: String,
-}
-
-#[derive(Serialize)]
-struct StatsResponse {
-    repo_count: i64,
-    file_count: i64,
-    trunk_count: i64,
-    total_size: i64,
-    unique_size: i64,
+    http_client: Arc<reqwest::Client>,
 }
 
 #[derive(Serialize)]
@@ -75,107 +61,136 @@ struct ErrorResponse {
 }
 
 async fn root(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
-    let service = state.service.lock().await;
-    let s = service.stats().await?;
     Ok(Json(serde_json::json!({
         "service": "hugrs",
         "version": env!("CARGO_PKG_VERSION"),
         "hf_endpoint": state.config.huggingface.endpoint,
-        "stats": {
-            "repos": s.repo_count,
-            "files": s.file_count,
-            "trunks": s.trunk_count,
-            "total_size": s.total_size,
-            "unique_size": s.unique_size
-        }
     })))
 }
 
-async fn upload_file(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Result<impl IntoResponse, AppError> {
-    while let Some(field) = multipart.next_field().await? {
-        let name = field.file_name().unwrap_or("unnamed").to_string();
-        let data = field.bytes().await?;
-        let service = state.service.lock().await;
-        service.upload(&name, "upload", data.to_vec()).await?;
-        tracing::info!("HTTP upload: {} ({} bytes)", name, data.len());
-    }
-    Ok(StatusCode::CREATED)
+async fn whoami() -> Result<Json<serde_json::Value>, AppError> {
+    Ok(Json(serde_json::json!({
+        "name": "mirror",
+        "auth": true,
+    })))
 }
 
-async fn download_file(
+async fn model_info_revision(
     State(state): State<AppState>,
-    Path(name): Path<String>,
+    Path((org, repo, revision)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
+    let repo_id = format!("{}/{}", org, repo);
+    let url = format!(
+        "{}/api/models/{}/revision/{}",
+        state.config.huggingface.endpoint, repo_id, revision
+    );
+    proxy_json(&state, &url).await
+}
+
+async fn file_resolve(
+    State(state): State<AppState>,
+    Path((org, repo, revision, path)): Path<(String, String, String, String)>,
+) -> Result<Response, AppError> {
+    let repo_id = format!("{}/{}", org, repo);
+    let cache_name = format!("{}/{}", repo_id, path);
+    serve_file(&state, &repo_id, &cache_name, &revision, &path).await
+}
+
+async fn resolve_cache(
+    State(state): State<AppState>,
+    Path((_repo_type, org, repo, revision, path)): Path<(String, String, String, String, String)>,
+) -> Result<Response, AppError> {
+    let repo_id = format!("{}/{}", org, repo);
+    let cache_name = format!("{}/{}", repo_id, path);
+    serve_file(&state, &repo_id, &cache_name, &revision, &path).await
+}
+
+async fn serve_file(
+    state: &AppState,
+    repo_id: &str,
+    cache_name: &str,
+    revision: &str,
+    path: &str,
+) -> Result<Response, AppError> {
+    {
+        let service = state.service.lock().await;
+        if let Ok(Some(file)) = service.info(cache_name).await {
+            let data = service.download(cache_name).await?;
+            return build_file_response(data, &file, path);
+        }
+    }
+
+    let url = format!(
+        "{}/{}/resolve/{}/{}",
+        state.config.huggingface.endpoint, repo_id, revision, path
+    );
+
     let service = state.service.lock().await;
-    let data = service
-        .download(&name)
-        .await
-        .map_err(|_| AppError::NotFound(format!("file not found: {}", name)))?;
-    Response::builder()
+    service
+        .download_from_url(&url, cache_name, repo_id, 8)
+        .await?;
+    let file = service.info(cache_name).await?.unwrap();
+    let data = service.download(cache_name).await?;
+    drop(service);
+
+    build_file_response(data, &file, path)
+}
+
+fn build_file_response(
+    data: Vec<u8>,
+    file: &crate::metadata::File,
+    path: &str,
+) -> Result<Response, AppError> {
+    let filename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
+    let disposition = format!(
+        "inline; filename*=UTF-8''{}; filename=\"{}\"",
+        filename, filename
+    );
+
+    let mut resp = Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/octet-stream")
-        .body(data.into())
+        .header("content-disposition", &disposition)
+        .header("content-length", data.len())
+        .header("accept-ranges", "bytes");
+
+    if let Some(ref etag) = file.etag {
+        resp = resp.header("etag", etag);
+    }
+    if let Some(ref commit) = file.x_repo_commit {
+        resp = resp.header("x-repo-commit", commit);
+    }
+    if let Some(size) = file.x_linked_size {
+        resp = resp.header("x-linked-size", size);
+    }
+    if let Some(ref linked_etag) = file.x_linked_etag {
+        resp = resp.header("x-linked-etag", linked_etag);
+    }
+
+    resp.body(data.into())
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
-async fn file_info(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Result<Json<FileInfoResponse>, AppError> {
-    let service = state.service.lock().await;
-    match service.info(&name).await? {
-        Some(f) => Ok(Json(FileInfoResponse {
-            name: f.name,
-            repo: f.repo,
-            total_size: f.total_size,
-            created_at: f.created_at,
-            last_accessed: f.last_accessed,
-            source: f.source,
-        })),
-        None => Err(AppError::NotFound(format!("file not found: {}", name))),
+async fn proxy_json(state: &AppState, url: &str) -> Result<Response, AppError> {
+    let mut req = state.http_client.get(url);
+    if let Some(ref token) = state.config.huggingface.token {
+        req = req.header("Authorization", format!("Bearer {}", token));
     }
-}
-
-async fn delete_file(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Result<StatusCode, AppError> {
-    let service = state.service.lock().await;
-    let deleted = service.delete(&name).await?;
-    if deleted {
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(AppError::NotFound(format!("file not found: {}", name)))
-    }
-}
-
-async fn pull_model(
-    State(state): State<AppState>,
-    Json(req): Json<PullRequest>,
-) -> Result<StatusCode, AppError> {
-    let service = state.service.lock().await;
-    crate::hf::pull_model(&state.config, &service, &req.repo, req.file.as_deref()).await?;
-    Ok(StatusCode::ACCEPTED)
-}
-
-async fn stats(State(state): State<AppState>) -> Result<Json<StatsResponse>, AppError> {
-    let service = state.service.lock().await;
-    let s = service.stats().await?;
-    Ok(Json(StatsResponse {
-        repo_count: s.repo_count,
-        file_count: s.file_count,
-        trunk_count: s.trunk_count,
-        total_size: s.total_size,
-        unique_size: s.unique_size,
-    }))
+    let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
+    let status = resp.status();
+    let body = resp.text().await.map_err(|e| AppError::Anyhow(e.into()))?;
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(body.into())
+        .map_err(|e| AppError::Anyhow(e.into()))
 }
 
 enum AppError {
     Anyhow(anyhow::Error),
-    NotFound(String),
 }
 
 impl From<anyhow::Error> for AppError {
@@ -184,20 +199,13 @@ impl From<anyhow::Error> for AppError {
     }
 }
 
-impl From<axum::extract::multipart::MultipartError> for AppError {
-    fn from(e: axum::extract::multipart::MultipartError) -> Self {
-        AppError::Anyhow(e.into())
-    }
-}
-
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
             AppError::Anyhow(e) => {
-                tracing::error!("Internal error: {}", e);
+                tracing::error!("{}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e))
             }
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
         };
         let body = Json(ErrorResponse { error: message });
         (status, body).into_response()

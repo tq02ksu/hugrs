@@ -1,0 +1,345 @@
+openapi: "3.0.3"
+info:
+  title: HugRS - HuggingFace Mirror API
+  description: |
+    Single-service HuggingFace Hub mirror. All requests served from one
+    domain, no CDN redirects. Derived from actual nginx access logs of
+    `huggingface-cli download` (v1.16.1, hf_hub v1.16.1).
+  version: "0.1.0"
+
+servers:
+  - url: http://127.0.0.1:3000
+    description: Default local server
+
+tags:
+  - name: Mirror
+    description: Required by huggingface-cli / huggingface_hub SDK
+
+paths:
+  /:
+    get:
+      tags: [Mirror]
+      summary: Health
+      operationId: root
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                  version:
+                    type: string
+                  hf_endpoint:
+                    type: string
+
+  /api/whoami-v2:
+    get:
+      tags: [Mirror]
+      summary: Identity (CLI login check)
+      operationId: whoami
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  auth:
+                    type: boolean
+
+  /api/models/{org}/{repo}/revision/{revision}:
+    parameters:
+      - name: org
+        in: path
+        required: true
+        schema:
+          type: string
+        example: Qwen
+      - name: repo
+        in: path
+        required: true
+        schema:
+          type: string
+        example: Qwen3.5-397B-A17B-FP8
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: string
+        example: main
+    get:
+      tags: [Mirror]
+      summary: Repository metadata at revision
+      description: |
+        Returns model metadata including `siblings` array (file list)
+        and `sha` (commit hash). Called by `snapshot_download` to
+        discover files before downloading.
+      operationId: model_info_revision
+      responses:
+        "200":
+          description: Model metadata
+          headers:
+            X-Repo-Commit:
+              schema:
+                type: string
+              description: Current commit SHA
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelInfo"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [Mirror]
+      summary: Check revision existence
+      operationId: model_info_revision_head
+      responses:
+        "200":
+          description: OK
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /{org}/{repo}/resolve/{revision}/{path}:
+    parameters:
+      - name: org
+        in: path
+        required: true
+        schema:
+          type: string
+        example: Qwen
+      - name: repo
+        in: path
+        required: true
+        schema:
+          type: string
+        example: Qwen3.5-397B-A17B-FP8
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Commit SHA (resolved from model info) or branch name
+        example: ea5b4f81096f3901c91dea97f81324302495781d
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+        description: File path within repo (wildcard)
+        example: model.safetensors-00001-of-00094.safetensors
+    get:
+      tags: [Mirror]
+      summary: Download a file
+      description: |
+        Directly returns file content (no redirect). Serves from cache
+        if available, otherwise proxies from upstream and caches.
+        Supports Range for resumable downloads.
+      operationId: file_resolve
+      responses:
+        "200":
+          description: Full file content
+          headers:
+            Content-Length:
+              schema:
+                type: integer
+                format: int64
+            Content-Type:
+              schema:
+                type: string
+                example: application/octet-stream
+            ETag:
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                type: string
+                example: bytes
+            X-Repo-Commit:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial content (Range)
+          headers:
+            Content-Range:
+              schema:
+                type: string
+            Content-Length:
+              schema:
+                type: integer
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [Mirror]
+      summary: Check file existence and metadata
+      description: |
+        Returns Content-Length, ETag, X-Repo-Commit headers without
+        transferring the body. CLI uses this to decide whether to
+        download or skip (based on ETag match).
+      operationId: file_resolve_head
+      responses:
+        "200":
+          description: File metadata headers
+          headers:
+            Content-Length:
+              schema:
+                type: integer
+                format: int64
+            ETag:
+              schema:
+                type: string
+            Accept-Ranges:
+              schema:
+                type: string
+            X-Repo-Commit:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{path}:
+    parameters:
+      - name: repo_type
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [models, datasets, spaces]
+        example: models
+      - name: org
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: repo
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: revision
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+    head:
+      tags: [Mirror]
+      summary: Check if file is cached (resolve-cache)
+      description: |
+        HuggingFace Hub internal endpoint for checking cache state.
+        CLI calls this after a HEAD to the resolve URL to determine
+        if the file is already cached locally.
+      operationId: resolve_cache_head
+      responses:
+        "200":
+          description: File is cached
+          headers:
+            Content-Length:
+              schema:
+                type: integer
+            ETag:
+              schema:
+                type: string
+        "404":
+          description: Not cached
+    get:
+      tags: [Mirror]
+      summary: Get cached file (resolve-cache)
+      operationId: resolve_cache_get
+      responses:
+        "200":
+          description: File content from cache
+          headers:
+            Content-Length:
+              schema:
+                type: integer
+            Accept-Ranges:
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Not cached
+
+components:
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ModelInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          example: Qwen/Qwen3.5-397B-A17B-FP8
+        sha:
+          type: string
+          description: HEAD commit SHA
+        siblings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Sibling"
+        private:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        pipeline_tag:
+          type: string
+        library_name:
+          type: string
+        lastModified:
+          type: string
+          format: date-time
+
+    Sibling:
+      type: object
+      properties:
+        rfilename:
+          type: string
+          example: model.safetensors-00001-of-00094.safetensors
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string

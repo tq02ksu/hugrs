@@ -11,6 +11,10 @@ pub struct File {
     pub created_at: String,
     pub last_accessed: String,
     pub source: String,
+    pub etag: Option<String>,
+    pub x_repo_commit: Option<String>,
+    pub x_linked_size: Option<i64>,
+    pub x_linked_etag: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +99,28 @@ impl MetadataStore {
         if !has_repo {
             conn.execute_batch("ALTER TABLE files ADD COLUMN repo TEXT NOT NULL DEFAULT ''")?;
         }
+        let has_etag: bool = conn.prepare("SELECT etag FROM files LIMIT 0").is_ok();
+        if !has_etag {
+            conn.execute_batch("ALTER TABLE files ADD COLUMN etag TEXT")?;
+        }
+        let has_x_repo_commit: bool = conn
+            .prepare("SELECT x_repo_commit FROM files LIMIT 0")
+            .is_ok();
+        if !has_x_repo_commit {
+            conn.execute_batch("ALTER TABLE files ADD COLUMN x_repo_commit TEXT")?;
+        }
+        let has_x_linked_size: bool = conn
+            .prepare("SELECT x_linked_size FROM files LIMIT 0")
+            .is_ok();
+        if !has_x_linked_size {
+            conn.execute_batch("ALTER TABLE files ADD COLUMN x_linked_size INTEGER")?;
+        }
+        let has_x_linked_etag: bool = conn
+            .prepare("SELECT x_linked_etag FROM files LIMIT 0")
+            .is_ok();
+        if !has_x_linked_etag {
+            conn.execute_batch("ALTER TABLE files ADD COLUMN x_linked_etag TEXT")?;
+        }
         Ok(())
     }
 
@@ -119,13 +145,17 @@ impl MetadataStore {
             created_at: String::new(),
             last_accessed: String::new(),
             source: source.to_string(),
+            etag: None,
+            x_repo_commit: None,
+            x_linked_size: None,
+            x_linked_etag: None,
         })
     }
 
     pub fn get_file_by_name(&self, name: &str) -> anyhow::Result<Option<File>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, repo, total_size, created_at, last_accessed, source FROM files WHERE name = ?1",
+            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag FROM files WHERE name = ?1",
         )?;
         let mut rows = stmt.query_map(params![name], |row| {
             Ok(File {
@@ -136,9 +166,29 @@ impl MetadataStore {
                 created_at: row.get(4)?,
                 last_accessed: row.get(5)?,
                 source: row.get(6)?,
+                etag: row.get(7)?,
+                x_repo_commit: row.get(8)?,
+                x_linked_size: row.get(9)?,
+                x_linked_etag: row.get(10)?,
             })
         })?;
         Ok(rows.next().transpose()?)
+    }
+
+    pub fn set_file_headers(
+        &self,
+        name: &str,
+        etag: Option<&str>,
+        x_repo_commit: Option<&str>,
+        x_linked_size: Option<i64>,
+        x_linked_etag: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET etag = ?1, x_repo_commit = ?2, x_linked_size = ?3, x_linked_etag = ?4 WHERE name = ?5",
+            params![etag, x_repo_commit, x_linked_size, x_linked_etag, name],
+        )?;
+        Ok(())
     }
 
     pub fn touch_repo(&self, repo: &str) -> anyhow::Result<()> {
@@ -294,7 +344,7 @@ impl MetadataStore {
     pub fn list_files(&self) -> anyhow::Result<Vec<File>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, repo, total_size, created_at, last_accessed, source FROM files ORDER BY repo, name",
+            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag FROM files ORDER BY repo, name",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(File {
@@ -305,6 +355,10 @@ impl MetadataStore {
                 created_at: row.get(4)?,
                 last_accessed: row.get(5)?,
                 source: row.get(6)?,
+                etag: row.get(7)?,
+                x_repo_commit: row.get(8)?,
+                x_linked_size: row.get(9)?,
+                x_linked_etag: row.get(10)?,
             })
         })?;
         let mut result = Vec::new();
