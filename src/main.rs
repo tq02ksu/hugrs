@@ -46,20 +46,13 @@ fn main() -> anyhow::Result<()> {
             }
             _ => Arc::new(storage::local::LocalBackend::new(
                 config.storage.local_root.clone(),
+                config.storage.compression,
             )),
         };
         let http_client = hf::build_client(&config)?;
         let service = CacheService::new(metadata, backend, config.storage.max_size, http_client);
 
         match cli.command {
-            Command::Upload { path, name, repo } => {
-                let name =
-                    name.unwrap_or_else(|| path.file_name().unwrap().to_string_lossy().to_string());
-                let data = tokio::fs::read(&path).await?;
-                service.upload(&name, &repo, data).await?;
-                tracing::info!("Uploaded {} to repo '{}' ({})", name, repo, path.display());
-            }
-
             Command::Pull { repo, file } => {
                 hf::pull_model(&config, &service, &repo, file.as_deref()).await?;
             }

@@ -24,9 +24,6 @@ cargo run -- serve
 # Start HTTP server with custom endpoint
 cargo run -- serve --hf-endpoint https://hf-mirror.com
 
-# Upload a file
-cargo run -- upload model.safetensors
-
 # Pull from HuggingFace
 cargo run -- pull bert-base-uncased
 

@@ -1,6 +1,7 @@
 use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
 use hugrs::storage::local::LocalBackend;
+use hugrs::storage::Compression;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -9,8 +10,10 @@ async fn test_upload_and_download() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> =
-        Arc::new(LocalBackend::new(dir.path().join("trunks")));
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
     let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
 
     let data = b"hello hugrs cache service";
@@ -36,8 +39,10 @@ async fn test_delete_and_gc() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> =
-        Arc::new(LocalBackend::new(dir.path().join("trunks")));
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
     let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
 
     service
@@ -58,8 +63,10 @@ async fn test_stats() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> =
-        Arc::new(LocalBackend::new(dir.path().join("trunks")));
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
     let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
 
     let stats = service.stats().await.unwrap();
@@ -80,8 +87,10 @@ async fn test_upload_duplicate_file_overwrites() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> =
-        Arc::new(LocalBackend::new(dir.path().join("trunks")));
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
     let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
 
     service
@@ -102,8 +111,10 @@ async fn test_lru_eviction() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> =
-        Arc::new(LocalBackend::new(dir.path().join("trunks")));
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
     let service = CacheService::new(metadata, backend, Some(300), reqwest::Client::new());
 
     service
@@ -126,8 +137,10 @@ async fn test_lru_eviction_by_repo() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> =
-        Arc::new(LocalBackend::new(dir.path().join("trunks")));
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
     let service = CacheService::new(metadata, backend, Some(250), reqwest::Client::new());
 
     service

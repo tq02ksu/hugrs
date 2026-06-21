@@ -26,6 +26,7 @@ tempfile = "3"
 toml = "0.8"
 dotenvy = "0.15"
 dirs = "6"
+zstd = "0.13"
 
 [dev-dependencies]
 tokio-test = "0.4"

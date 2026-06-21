@@ -1,3 +1,4 @@
+use crate::storage::Compression;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -28,6 +29,9 @@ pub struct StorageConfig {
     pub s3_region: Option<String>,
     pub s3_prefix: Option<String>,
     pub s3_endpoint: Option<String>,
+
+    #[serde(default)]
+    pub compression: Compression,
 
     pub max_size: Option<u64>,
 }
@@ -60,17 +64,24 @@ pub struct HfConfig {
 fn default_backend() -> String {
     "local".into()
 }
+fn default_cache_base() -> PathBuf {
+    let cache = dirs::cache_dir().unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".cache")
+    });
+    if cache.is_relative() {
+        std::env::current_dir().unwrap_or_default().join(cache)
+    } else {
+        cache
+    }
+}
+
 fn default_local_root() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("hugrs")
-        .join("trunks")
+    default_cache_base().join("hugrs").join("trunks")
 }
 fn default_db_path() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("hugrs")
-        .join("hugrs.db")
+    default_cache_base().join("hugrs").join("hugrs.db")
 }
 fn default_host() -> String {
     "127.0.0.1".into()
@@ -91,6 +102,7 @@ impl Default for StorageConfig {
             s3_region: None,
             s3_prefix: None,
             s3_endpoint: None,
+            compression: Compression::default(),
             max_size: None,
         }
     }
@@ -137,6 +149,7 @@ pub struct CliOverrides {
     pub hf_token: Option<String>,
     pub hf_proxy: Option<String>,
     pub config_file: Option<String>,
+    pub compression: Option<String>,
     pub max_size: Option<u64>,
 }
 
@@ -185,6 +198,9 @@ impl Config {
         if let Ok(val) = std::env::var("HUGRS_S3_ENDPOINT") {
             config.storage.s3_endpoint = Some(val);
         }
+        if let Ok(val) = std::env::var("HUGRS_COMPRESSION") {
+            config.storage.compression = val.parse()?;
+        }
         if let Ok(val) = std::env::var("HUGRS_MAX_SIZE") {
             config.storage.max_size = Some(val.parse()?);
         }
@@ -227,6 +243,9 @@ impl Config {
         }
         if let Some(v) = overrides.s3_endpoint {
             config.storage.s3_endpoint = Some(v);
+        }
+        if let Some(v) = overrides.compression {
+            config.storage.compression = v.parse()?;
         }
         if let Some(v) = overrides.max_size {
             config.storage.max_size = Some(v);

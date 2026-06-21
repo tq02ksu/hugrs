@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "hugrs")]
@@ -45,6 +44,9 @@ pub struct Cli {
     pub hf_proxy: Option<String>,
 
     #[arg(long, global = true)]
+    pub compression: Option<String>,
+
+    #[arg(long, global = true)]
     pub max_size: Option<u64>,
 
     #[command(subcommand)]
@@ -67,6 +69,7 @@ impl Cli {
             hf_token: self.hf_token.clone(),
             hf_proxy: self.hf_proxy.clone(),
             config_file: self.config.clone(),
+            compression: self.compression.clone(),
             max_size: self.max_size,
         }
     }
@@ -74,16 +77,6 @@ impl Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    Upload {
-        path: PathBuf,
-
-        #[arg(short, long)]
-        name: Option<String>,
-
-        #[arg(short, long, default_value = "upload")]
-        repo: String,
-    },
-
     Pull {
         repo: String,
 
