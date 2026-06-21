@@ -37,6 +37,8 @@ pub async fn pull_model(
         .json()
         .await?;
 
+    let mut errors = Vec::new();
+
     for sibling in &info.siblings {
         if let Some(filter) = file_filter {
             if sibling.rfilename != filter {
@@ -51,12 +53,24 @@ pub async fn pull_model(
 
         tracing::info!("Pulling {} from {}", sibling.rfilename, download_url);
 
-        service
+        if let Err(e) = service
             .download_from_url(&download_url, &sibling.rfilename, repo_id, 8)
-            .await?;
+            .await
+        {
+            tracing::error!("Failed to pull {}: {}", sibling.rfilename, e);
+            errors.push(format!("{}: {}", sibling.rfilename, e));
+        }
     }
 
-    Ok(())
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "Failed to pull {} file(s):\n{}",
+            errors.len(),
+            errors.join("\n")
+        )
+    }
 }
 
 pub fn build_client(config: &Config) -> anyhow::Result<reqwest::Client> {

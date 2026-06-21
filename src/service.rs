@@ -80,7 +80,7 @@ impl CacheService {
         repo: &str,
         concurrency: usize,
     ) -> anyhow::Result<()> {
-        if self.metadata.get_file_by_name(name)?.is_some() {
+        if self.is_file_complete(name).await? {
             tracing::info!("{} already cached, skipping", name);
             self.metadata.touch_repo(repo)?;
             return Ok(());
@@ -95,9 +95,10 @@ impl CacheService {
         };
         let _guard = file_lock.lock().await;
 
-        if self.metadata.get_file_by_name(name)?.is_some() {
+        if self.is_file_complete(name).await? {
             return Ok(());
         }
+        self.metadata.delete_file(name)?;
 
         let head = self.http_client.head(url).send().await?;
         let headers = head.headers();
@@ -244,10 +245,44 @@ impl CacheService {
 
         for ft in &trunks {
             let data = self.backend.get(&ft.sha256).await?;
+            let actual_hash = chunker::sha256_hex(&data);
+            if actual_hash != ft.sha256 {
+                anyhow::bail!(
+                    "checksum mismatch for {} chunk {}: expected {} got {}",
+                    name,
+                    ft.chunk_index,
+                    ft.sha256,
+                    actual_hash
+                );
+            }
             chunks.push(data);
         }
 
         Ok(chunker::assemble_chunks(&chunks))
+    }
+
+    async fn is_file_complete(&self, name: &str) -> anyhow::Result<bool> {
+        let file = match self.metadata.get_file_by_name(name)? {
+            Some(f) => f,
+            None => return Ok(false),
+        };
+
+        let trunks = self.metadata.get_file_trunks(file.id)?;
+        let expected = (file.total_size as usize).div_ceil(CHUNK_SIZE);
+        if trunks.len() != expected {
+            return Ok(false);
+        }
+
+        for (i, ft) in trunks.iter().enumerate() {
+            if ft.chunk_index != i as i64 {
+                return Ok(false);
+            }
+            if !self.backend.exists(&ft.sha256).await? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
     }
 
     pub async fn info(&self, name: &str) -> anyhow::Result<Option<File>> {
