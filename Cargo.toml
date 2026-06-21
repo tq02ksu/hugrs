@@ -9,7 +9,7 @@ axum = { version = "0.8", features = ["multipart"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls", "json"] }
 aws-sdk-s3 = "1"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 anyhow = "1"
