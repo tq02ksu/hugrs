@@ -44,7 +44,7 @@ fn test_add_trunk_and_link() {
     let store = MetadataStore::new(&db_path).unwrap();
 
     store
-        .ensure_trunk("abc123", "local", "ab/c3/abc123", 100)
+        .ensure_trunk("abc123", "local", "ab/c3/abc123", 100, 100)
         .unwrap();
     let trunk = store.get_trunk("abc123").unwrap().unwrap();
     assert_eq!(trunk.size, 100);
@@ -64,7 +64,7 @@ fn test_unlink_and_gc() {
     let store = MetadataStore::new(&db_path).unwrap();
 
     store
-        .ensure_trunk("def456", "local", "de/f4/def456", 200)
+        .ensure_trunk("def456", "local", "de/f4/def456", 200, 200)
         .unwrap();
     let file = store.add_file("x.bin", "repo-z", 200, "upload").unwrap();
     store.link_file_trunk(file.id, "def456", 0, 200).unwrap();
@@ -100,7 +100,7 @@ fn test_stats() {
     assert_eq!(stats.repo_count, 0);
 
     store.add_file("f.bin", "r", 500, "upload").unwrap();
-    store.ensure_trunk("s1", "local", "s/1", 500).unwrap();
+    store.ensure_trunk("s1", "local", "s/1", 500, 500).unwrap();
 
     let stats = store.get_stats().unwrap();
     assert_eq!(stats.file_count, 1);

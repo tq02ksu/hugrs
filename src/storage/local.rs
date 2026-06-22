@@ -29,18 +29,21 @@ impl LocalBackend {
 
 #[async_trait]
 impl StorageBackend for LocalBackend {
-    async fn put(&self, sha256: &str, data: &[u8]) -> anyhow::Result<()> {
+    async fn put(&self, sha256: &str, data: &[u8]) -> anyhow::Result<u64> {
         let path = self.trunk_path(sha256);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         if self.compression == Compression::Zstd && data.len() > COMPRESS_THRESHOLD {
             let compressed = zstd::encode_all(data, 0)?;
+            let len = compressed.len() as u64;
             tokio::fs::write(&self.compressed_path(sha256), &compressed).await?;
+            Ok(len)
         } else {
+            let len = data.len() as u64;
             tokio::fs::write(&path, data).await?;
+            Ok(len)
         }
-        Ok(())
     }
 
     async fn get(&self, sha256: &str) -> anyhow::Result<Vec<u8>> {

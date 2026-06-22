@@ -24,6 +24,7 @@ pub struct Trunk {
     pub backend: String,
     pub path: String,
     pub size: i64,
+    pub compressed_size: Option<i64>,
     pub ref_count: i64,
 }
 
@@ -135,6 +136,12 @@ impl MetadataStore {
             .is_ok();
         if !has_content_type {
             conn.execute_batch("ALTER TABLE files ADD COLUMN content_type TEXT")?;
+        }
+        let has_compressed_size: bool = conn
+            .prepare("SELECT compressed_size FROM trunks LIMIT 0")
+            .is_ok();
+        if !has_compressed_size {
+            conn.execute_batch("ALTER TABLE trunks ADD COLUMN compressed_size INTEGER")?;
         }
         Ok(())
     }
@@ -294,11 +301,12 @@ impl MetadataStore {
         backend: &str,
         path: &str,
         size: i64,
+        compressed_size: i64,
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO trunks (sha256, backend, path, size) VALUES (?1, ?2, ?3, ?4)",
-            params![sha256, backend, path, size],
+            "INSERT OR IGNORE INTO trunks (sha256, backend, path, size, compressed_size) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![sha256, backend, path, size, compressed_size],
         )?;
         Ok(())
     }
@@ -306,7 +314,7 @@ impl MetadataStore {
     pub fn get_trunk(&self, sha256: &str) -> anyhow::Result<Option<Trunk>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT sha256, backend, path, size, ref_count FROM trunks WHERE sha256 = ?1",
+            "SELECT sha256, backend, path, size, compressed_size, ref_count FROM trunks WHERE sha256 = ?1",
         )?;
         let mut rows = stmt.query_map(params![sha256], |row| {
             Ok(Trunk {
@@ -314,7 +322,8 @@ impl MetadataStore {
                 backend: row.get(1)?,
                 path: row.get(2)?,
                 size: row.get(3)?,
-                ref_count: row.get(4)?,
+                compressed_size: row.get(4)?,
+                ref_count: row.get(5)?,
             })
         })?;
         Ok(rows.next().transpose()?)

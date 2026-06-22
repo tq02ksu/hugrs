@@ -54,13 +54,20 @@ impl CacheService {
         let file = self.metadata.add_file(name, repo, total_size, "upload")?;
 
         for chunk in &chunks {
-            if !self.backend.exists(&chunk.sha256).await? {
-                self.backend.put(&chunk.sha256, &chunk.data).await?;
-            }
+            let stored_size: i64 = if !self.backend.exists(&chunk.sha256).await? {
+                self.backend.put(&chunk.sha256, &chunk.data).await? as i64
+            } else {
+                chunk.chunk_size as i64
+            };
 
             let path = self.trunk_path(&chunk.sha256);
-            self.metadata
-                .ensure_trunk(&chunk.sha256, "local", &path, chunk.chunk_size as i64)?;
+            self.metadata.ensure_trunk(
+                &chunk.sha256,
+                "local",
+                &path,
+                chunk.chunk_size as i64,
+                stored_size,
+            )?;
 
             self.metadata.link_file_trunk(
                 file.id,
@@ -239,13 +246,20 @@ impl CacheService {
         while let Some(result) = futs.next().await {
             let chunk = result??;
 
-            if !self.backend.exists(&chunk.sha256).await? {
-                self.backend.put(&chunk.sha256, &chunk.data).await?;
-            }
+            let stored_size: i64 = if !self.backend.exists(&chunk.sha256).await? {
+                self.backend.put(&chunk.sha256, &chunk.data).await? as i64
+            } else {
+                chunk.size as i64
+            };
 
             let path = self.trunk_path(&chunk.sha256);
-            self.metadata
-                .ensure_trunk(&chunk.sha256, "local", &path, chunk.size as i64)?;
+            self.metadata.ensure_trunk(
+                &chunk.sha256,
+                "local",
+                &path,
+                chunk.size as i64,
+                stored_size,
+            )?;
 
             self.metadata.link_file_trunk(
                 file_id,
@@ -299,12 +313,18 @@ impl CacheService {
             let data = self.backend.get(&ft.sha256).await?;
             let actual_hash = chunker::sha256_hex(&data);
             if actual_hash != ft.sha256 {
-                anyhow::bail!(
+                tracing::error!(
                     "checksum mismatch for {} chunk {}: expected {} got {}",
                     name,
                     ft.chunk_index,
                     ft.sha256,
                     actual_hash
+                );
+                let _ = self.backend.delete(&ft.sha256).await;
+                anyhow::bail!(
+                    "checksum mismatch for {} chunk {}",
+                    name,
+                    ft.chunk_index
                 );
             }
             chunks.push(data);
@@ -432,7 +452,7 @@ impl CacheService {
         self.backend.get(key).await
     }
 
-    pub async fn backend_put(&self, key: &str, data: &[u8]) -> anyhow::Result<()> {
+    pub async fn backend_put(&self, key: &str, data: &[u8]) -> anyhow::Result<u64> {
         self.backend.put(key, data).await
     }
 
@@ -498,6 +518,24 @@ impl CacheService {
                         return;
                     }
                 };
+
+                let actual_hash = chunker::sha256_hex(&data);
+                if actual_hash != ft.sha256 {
+                    tracing::error!(
+                        "checksum mismatch for chunk {}: expected {} got {}",
+                        ft.chunk_index,
+                        ft.sha256,
+                        actual_hash
+                    );
+                    let _ = backend.delete(&ft.sha256).await;
+                    let _ = tx
+                        .send(Err(anyhow::anyhow!(
+                            "checksum mismatch for chunk {}",
+                            ft.chunk_index
+                        )))
+                        .await;
+                    return;
+                }
 
                 let chunk_start = byte_offset;
                 let chunk_end = byte_offset + data.len() as u64 - 1;
@@ -697,12 +735,18 @@ impl CacheService {
 
                 let sha256 = chunker::sha256_hex(&data);
 
-                if !backend.exists(&sha256).await.unwrap_or(false) {
-                    if let Err(e) = backend.put(&sha256, &data).await {
-                        let _ = tx.send(Err(e)).await;
-                        return;
-                    }
-                }
+                let stored_size: i64 =
+                    if !backend.exists(&sha256).await.unwrap_or(false) {
+                        match backend.put(&sha256, &data).await {
+                            Ok(sz) => sz as i64,
+                            Err(e) => {
+                                let _ = tx.send(Err(e)).await;
+                                return;
+                            }
+                        }
+                    } else {
+                        data.len() as i64
+                    };
 
                 let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
                 if let Err(e) = metadata.ensure_trunk(
@@ -710,6 +754,7 @@ impl CacheService {
                     "local",
                     &path,
                     data.len() as i64,
+                    stored_size,
                 ) {
                     let _ = tx.send(Err(e)).await;
                     return;

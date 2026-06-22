@@ -43,7 +43,8 @@ impl S3Backend {
 
 #[async_trait]
 impl StorageBackend for S3Backend {
-    async fn put(&self, sha256: &str, data: &[u8]) -> anyhow::Result<()> {
+    async fn put(&self, sha256: &str, data: &[u8]) -> anyhow::Result<u64> {
+        let len = data.len() as u64;
         let key = self.s3_key(sha256);
         let body = aws_sdk_s3::primitives::ByteStream::from(data.to_vec());
         self.client
@@ -53,7 +54,7 @@ impl StorageBackend for S3Backend {
             .body(body)
             .send()
             .await?;
-        Ok(())
+        Ok(len)
     }
 
     async fn get(&self, sha256: &str) -> anyhow::Result<Vec<u8>> {
