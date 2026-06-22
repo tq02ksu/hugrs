@@ -22,6 +22,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = "0.1"
 tempfile = "3"
 toml = "0.8"
 dotenvy = "0.15"

@@ -15,6 +15,7 @@ pub struct File {
     pub x_repo_commit: Option<String>,
     pub x_linked_size: Option<i64>,
     pub x_linked_etag: Option<String>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +93,14 @@ impl MetadataStore {
                 chunk_index  INTEGER NOT NULL,
                 chunk_size   INTEGER NOT NULL,
                 PRIMARY KEY (file_id, chunk_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS http_cache (
+                url        TEXT PRIMARY KEY,
+                status     INTEGER NOT NULL,
+                headers    TEXT NOT NULL,
+                body       BLOB NOT NULL,
+                cached_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );",
         )?;
         // Migration: add repo column if upgrading from older schema
@@ -121,6 +130,12 @@ impl MetadataStore {
         if !has_x_linked_etag {
             conn.execute_batch("ALTER TABLE files ADD COLUMN x_linked_etag TEXT")?;
         }
+        let has_content_type: bool = conn
+            .prepare("SELECT content_type FROM files LIMIT 0")
+            .is_ok();
+        if !has_content_type {
+            conn.execute_batch("ALTER TABLE files ADD COLUMN content_type TEXT")?;
+        }
         Ok(())
     }
 
@@ -149,13 +164,14 @@ impl MetadataStore {
             x_repo_commit: None,
             x_linked_size: None,
             x_linked_etag: None,
+            content_type: None,
         })
     }
 
     pub fn get_file_by_name(&self, name: &str) -> anyhow::Result<Option<File>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag FROM files WHERE name = ?1",
+            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files WHERE name = ?1",
         )?;
         let mut rows = stmt.query_map(params![name], |row| {
             Ok(File {
@@ -170,6 +186,7 @@ impl MetadataStore {
                 x_repo_commit: row.get(8)?,
                 x_linked_size: row.get(9)?,
                 x_linked_etag: row.get(10)?,
+                content_type: row.get(11)?,
             })
         })?;
         Ok(rows.next().transpose()?)
@@ -182,11 +199,12 @@ impl MetadataStore {
         x_repo_commit: Option<&str>,
         x_linked_size: Option<i64>,
         x_linked_etag: Option<&str>,
+        content_type: Option<&str>,
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE files SET etag = ?1, x_repo_commit = ?2, x_linked_size = ?3, x_linked_etag = ?4 WHERE name = ?5",
-            params![etag, x_repo_commit, x_linked_size, x_linked_etag, name],
+            "UPDATE files SET etag = ?1, x_repo_commit = ?2, x_linked_size = ?3, x_linked_etag = ?4, content_type = ?5 WHERE name = ?6",
+            params![etag, x_repo_commit, x_linked_size, x_linked_etag, content_type, name],
         )?;
         Ok(())
     }
@@ -344,7 +362,7 @@ impl MetadataStore {
     pub fn list_files(&self) -> anyhow::Result<Vec<File>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag FROM files ORDER BY repo, name",
+            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files ORDER BY repo, name",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(File {
@@ -359,6 +377,7 @@ impl MetadataStore {
                 x_repo_commit: row.get(8)?,
                 x_linked_size: row.get(9)?,
                 x_linked_etag: row.get(10)?,
+                content_type: row.get(11)?,
             })
         })?;
         let mut result = Vec::new();
@@ -404,5 +423,34 @@ impl MetadataStore {
             total_size,
             unique_size,
         })
+    }
+
+    pub fn get_http_cache(&self, url: &str) -> anyhow::Result<Option<(u16, String, Vec<u8>)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT status, headers, body FROM http_cache WHERE url = ?1")?;
+        let mut rows = stmt.query_map(params![url], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as u16,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+        Ok(rows.next().transpose()?)
+    }
+
+    pub fn set_http_cache(
+        &self,
+        url: &str,
+        status: u16,
+        headers: &str,
+        body: &[u8],
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO http_cache (url, status, headers, body, cached_at) VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+            params![url, status as i64, headers, body],
+        )?;
+        Ok(())
     }
 }
