@@ -45,7 +45,7 @@ impl CacheService {
             http_client,
             head_client,
             download_locks: Arc::new(StdMutex::new(HashMap::new())),
-            download_sem: Arc::new(Semaphore::new(8)),
+            download_sem: Arc::new(Semaphore::new(16)),
         }
     }
 
