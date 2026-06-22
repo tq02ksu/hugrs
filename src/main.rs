@@ -50,7 +50,14 @@ fn main() -> anyhow::Result<()> {
             )),
         };
         let http_client = hf::build_client(&config)?;
-        let service = CacheService::new(metadata, backend, config.storage.max_size, http_client);
+        let head_client = hf::build_head_client(&config)?;
+        let service = CacheService::new(
+            metadata,
+            backend,
+            config.storage.max_size,
+            http_client,
+            head_client,
+        );
 
         match cli.command {
             Command::Pull { repo, file } => {

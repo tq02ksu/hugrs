@@ -5,7 +5,7 @@ use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 
 pub const CHUNK_SIZE: usize = 4 * 1024 * 1024;
@@ -18,7 +18,9 @@ pub struct CacheService {
     backend: Arc<dyn StorageBackend>,
     max_size: Option<u64>,
     http_client: reqwest::Client,
+    head_client: reqwest::Client,
     download_locks: Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    download_sem: Arc<Semaphore>,
 }
 
 struct DownloadedChunk {
@@ -34,13 +36,16 @@ impl CacheService {
         backend: Arc<dyn StorageBackend>,
         max_size: Option<u64>,
         http_client: reqwest::Client,
+        head_client: reqwest::Client,
     ) -> Self {
         Self {
             metadata,
             backend,
             max_size,
             http_client,
+            head_client,
             download_locks: Arc::new(StdMutex::new(HashMap::new())),
+            download_sem: Arc::new(Semaphore::new(8)),
         }
     }
 
@@ -112,34 +117,61 @@ impl CacheService {
             return Ok(());
         }
 
-        let head = self.http_client.head(url).send().await?;
-        let headers = head.headers();
-        let total_size: u64 = headers
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+        let head_resp = self.head_client.head(url).send().await?;
+        let first_headers = head_resp.headers();
+        let status = head_resp.status();
 
-        let etag = headers
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let x_repo_commit = headers
+        let x_repo_commit = first_headers
             .get("x-repo-commit")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let x_linked_size = headers
+        let x_linked_size = first_headers
             .get("x-linked-size")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
-        let x_linked_etag = headers
+        let x_linked_etag = first_headers
             .get("x-linked-etag")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let content_type = headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+
+        let (total_size, etag, content_type, downstream_url) = if status.is_redirection() {
+            let location = first_headers
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            tracing::info!("download_from_url following redirect: {}", location);
+            let resp2 = self.http_client.head(location).send().await?;
+            let h = resp2.headers();
+            let cl: u64 = h
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+            let et = h
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let ct = h
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            (cl, et, ct, location.to_string())
+        } else {
+            let cl: u64 = first_headers
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+            let et = first_headers
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let ct = first_headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            (cl, et, ct, url.to_string())
+        };
 
         if total_size <= CHUNK_SIZE as u64 {
             tracing::info!(
@@ -147,7 +179,13 @@ impl CacheService {
                 name,
                 total_size
             );
-            let data = self.http_client.get(url).send().await?.bytes().await?;
+            let data = self
+                .http_client
+                .get(&downstream_url)
+                .send()
+                .await?
+                .bytes()
+                .await?;
             self.metadata.delete_file(name)?;
             self.upload(name, repo, data.to_vec()).await?;
             self.metadata.set_file_headers(
@@ -216,13 +254,15 @@ impl CacheService {
         for &i in &missing {
             let start = (i * CHUNK_SIZE) as u64;
             let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
-            let url = url.to_string();
+            let downstream_url = downstream_url.clone();
             let client = self.http_client.clone();
+            let sem = self.download_sem.clone();
 
             handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await;
                 let range_header = format!("bytes={}-{}", start, end);
                 let resp = client
-                    .get(&url)
+                    .get(&downstream_url)
                     .header("Range", &range_header)
                     .send()
                     .await?;
@@ -321,11 +361,7 @@ impl CacheService {
                     actual_hash
                 );
                 let _ = self.backend.delete(&ft.sha256).await;
-                anyhow::bail!(
-                    "checksum mismatch for {} chunk {}",
-                    name,
-                    ft.chunk_index
-                );
+                anyhow::bail!("checksum mismatch for {} chunk {}", name, ft.chunk_index);
             }
             chunks.push(data);
         }
@@ -369,12 +405,11 @@ impl CacheService {
         x_linked_etag: Option<&str>,
         content_type: Option<&str>,
     ) -> anyhow::Result<()> {
-        if self.metadata.get_file_by_name(name)?.is_some() {
-            return Ok(());
+        if self.metadata.get_file_by_name(name)?.is_none() {
+            self.metadata.delete_file(name)?;
+            self.metadata
+                .add_file(name, repo, total_size as i64, "pull")?;
         }
-        self.metadata.delete_file(name)?;
-        self.metadata
-            .add_file(name, repo, total_size as i64, "pull")?;
         self.metadata.set_file_headers(
             name,
             etag,
@@ -488,20 +523,14 @@ impl CacheService {
             .min(total_size.saturating_sub(1));
 
         if start > end || start >= total_size {
-            anyhow::bail!(
-                "invalid range: bytes={}-{}/{}",
-                start,
-                end,
-                total_size
-            );
+            anyhow::bail!("invalid range: bytes={}-{}/{}", start, end, total_size);
         }
 
         let content_length = end - start + 1;
         let trunks = self.metadata.get_file_trunks(file.id)?;
         let chunk_size_u64 = CHUNK_SIZE as u64;
         let first_chunk = (start / chunk_size_u64) as usize;
-        let last_chunk =
-            ((end / chunk_size_u64) as usize).min(trunks.len().saturating_sub(1));
+        let last_chunk = ((end / chunk_size_u64) as usize).min(trunks.len().saturating_sub(1));
 
         let backend = self.backend.clone();
         let relevant: Vec<_> = trunks[first_chunk..=last_chunk].to_vec();
@@ -568,13 +597,9 @@ impl CacheService {
         url: &str,
         name: &str,
         repo: &str,
+        range_start: Option<u64>,
+        range_end: Option<u64>,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
-        if self.is_file_complete(name).await? {
-            tracing::info!("{} already cached, streaming from cache", name);
-            self.metadata.touch_repo(repo)?;
-            return self.stream_cached_file(name, None, None).await;
-        }
-
         let file_lock = {
             let mut locks = self.download_locks.lock().unwrap();
             locks
@@ -584,205 +609,393 @@ impl CacheService {
         };
         let _guard = file_lock.lock().await;
 
-        if self.is_file_complete(name).await? {
-            return self.stream_cached_file(name, None, None).await;
-        }
+        let existing = self.metadata.get_file_by_name(name)?;
+        let (total_size_db, _file_id_db) = existing
+            .as_ref()
+            .map(|f| (f.total_size as u64, f.id))
+            .unwrap_or((0, 0));
 
-        let head_resp = self.http_client.head(url).send().await?;
-        let headers = head_resp.headers();
+        let head_resp = self.head_client.head(url).send().await?;
+        let first_headers = head_resp.headers();
+        let status = head_resp.status();
 
-        let total_size: u64 = headers
-            .get("content-length")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
-
-        let etag = headers
-            .get("etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let x_repo_commit = headers
+        let x_repo_commit = first_headers
             .get("x-repo-commit")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let x_linked_size: Option<i64> = headers
+        let x_linked_size: Option<i64> = first_headers
             .get("x-linked-size")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
-        let x_linked_etag = headers
+        let x_linked_etag = first_headers
             .get("x-linked-etag")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let content_type = headers
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
 
-        self.metadata.delete_file(name)?;
-        let db_file = self
-            .metadata
-            .add_file(name, repo, total_size as i64, "pull")?;
-        let file_id = db_file.id;
-
-        self.metadata.set_file_headers(
-            name,
-            etag.as_deref(),
-            x_repo_commit.as_deref(),
-            x_linked_size,
-            x_linked_etag.as_deref(),
-            content_type.as_deref(),
-        )?;
-
-        let file = self
-            .metadata
-            .get_file_by_name(name)?
-            .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?;
-
-        if total_size <= CHUNK_SIZE as u64 {
-            let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
-            let client = self.http_client.clone();
-            let url = url.to_string();
-            let svc = self.clone();
-            let fname = name.to_string();
-            let frepo = repo.to_string();
-
-            tokio::spawn(async move {
-                let data = match client.get(&url).send().await {
-                    Ok(resp) => match resp.bytes().await {
-                        Ok(d) => d,
-                        Err(e) => {
-                            let _ =
-                                tx.send(Err(anyhow::anyhow!("download error: {}", e)))
-                                    .await;
-                            return;
-                        }
-                    },
-                    Err(e) => {
-                        let _ =
-                            tx.send(Err(anyhow::anyhow!("request error: {}", e)))
-                                .await;
-                        return;
-                    }
-                };
-
-                if let Err(e) = svc.upload(&fname, &frepo, data.to_vec()).await {
-                    let _ = tx.send(Err(e)).await;
-                    return;
+        let (upstream_size, etag, content_type) = if status.is_redirection() {
+            let location = first_headers
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            tracing::info!("stream_from_upstream following redirect: {}", location);
+            match self.http_client.head(location).send().await {
+                Ok(resp2) => {
+                    let h = resp2.headers();
+                    let cl: u64 = h
+                        .get("content-length")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse().ok())
+                        .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+                    let et = h
+                        .get("etag")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    let ct = h
+                        .get("content-type")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    (cl, et, ct)
                 }
+                Err(e) => {
+                    anyhow::bail!("redirect follow failed for {}: {}", url, e);
+                }
+            }
+        } else {
+            let cl: u64 = first_headers
+                .get("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok())
+                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+            let et = first_headers
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let ct = first_headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            (cl, et, ct)
+        };
 
-                let _ = svc.metadata.set_file_headers(
-                    &fname,
+        if existing.is_some() && total_size_db != upstream_size {
+            self.metadata.delete_file(name)?;
+        }
+
+        let file = match self.metadata.get_file_by_name(name)? {
+            Some(f) => f,
+            None => {
+                self.metadata.delete_file(name)?;
+                self.metadata
+                    .add_file(name, repo, upstream_size as i64, "pull")?;
+                self.metadata.set_file_headers(
+                    name,
                     etag.as_deref(),
                     x_repo_commit.as_deref(),
                     x_linked_size,
                     x_linked_etag.as_deref(),
                     content_type.as_deref(),
-                );
+                )?;
+                self.metadata
+                    .get_file_by_name(name)?
+                    .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?
+            }
+        };
 
-                let _ = tx.send(Ok(data)).await;
-            });
+        let total_size = file.total_size as u64;
+        let file_id = file.id;
 
-            return Ok((file, total_size, ReceiverStream::new(rx)));
+        if upstream_size != total_size {
+            anyhow::bail!(
+                "upstream size {} != db size {} for {}",
+                upstream_size,
+                total_size,
+                name
+            );
+        }
+
+        let req_start = range_start.unwrap_or(0);
+        let req_end = range_end
+            .unwrap_or(total_size.saturating_sub(1))
+            .min(total_size.saturating_sub(1));
+        if req_start > req_end || req_start >= total_size {
+            anyhow::bail!(
+                "invalid range: bytes={}-{}/{}",
+                req_start,
+                req_end,
+                total_size
+            );
+        }
+        let content_length = req_end - req_start + 1;
+
+        if total_size <= CHUNK_SIZE as u64 {
+            return self.stream_small_file(url, name, &file, total_size).await;
         }
 
         let chunk_count = (total_size as usize).div_ceil(CHUNK_SIZE);
-        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(8);
+        let chunk_size_u64 = CHUNK_SIZE as u64;
+        let first_chunk = (req_start / chunk_size_u64) as usize;
+        let last_chunk = ((req_end / chunk_size_u64) as usize).min(chunk_count.saturating_sub(1));
 
-        let client = self.http_client.clone();
+        let trunks = self
+            .metadata
+            .get_file_trunks(file_id)?
+            .into_iter()
+            .map(|ft| (ft.chunk_index as usize, ft.sha256))
+            .collect::<HashMap<usize, String>>();
+
+        let mut cached: HashSet<usize> = HashSet::new();
+        let mut cached_sha: HashMap<usize, String> = HashMap::new();
+        for (&idx, sha) in &trunks {
+            if idx >= first_chunk
+                && idx <= last_chunk
+                && self.backend.exists(sha).await.unwrap_or(false)
+            {
+                cached.insert(idx);
+                cached_sha.insert(idx, sha.clone());
+            }
+        }
+
+        let missing: Vec<usize> = (first_chunk..=last_chunk)
+            .filter(|i| !cached.contains(i))
+            .collect();
+
+        tracing::info!(
+            "{} streaming: chunks {}-{}/{} ({} cached, {} to download)",
+            name,
+            first_chunk,
+            last_chunk,
+            chunk_count,
+            cached.len(),
+            missing.len()
+        );
+
+        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(16);
+
         let backend = self.backend.clone();
         let metadata = self.metadata.clone();
+        let client = self.http_client.clone();
         let url = url.to_string();
+        let sem = self.download_sem.clone();
         let fname = name.to_string();
         let frepo = repo.to_string();
 
-        tokio::spawn(async move {
-            for i in 0..chunk_count {
-                let start = (i * CHUNK_SIZE) as u64;
-                let end =
-                    std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
-                let range_header = format!("bytes={}-{}", start, end);
+        let mut chunk_rxs: HashMap<usize, oneshot::Receiver<Result<Bytes, anyhow::Error>>> =
+            HashMap::new();
 
-                let data = match client
-                    .get(&url)
-                    .header("Range", &range_header)
-                    .send()
-                    .await
-                {
-                    Ok(resp) => match resp.bytes().await {
-                        Ok(d) => d,
-                        Err(e) => {
+        if missing.contains(&first_chunk) {
+            let (chunk_tx, chunk_rx) = oneshot::channel();
+            chunk_rxs.insert(first_chunk, chunk_rx);
+
+            let client = client.clone();
+            let backend = backend.clone();
+            let metadata = metadata.clone();
+            let url = url.clone();
+            let fname = fname.clone();
+
+            tokio::spawn(async move {
+                let result = Self::do_download_chunk(
+                    client,
+                    url,
+                    first_chunk,
+                    total_size,
+                    backend,
+                    metadata,
+                    file_id,
+                    fname,
+                    chunk_count,
+                )
+                .await;
+                let _ = chunk_tx.send(result);
+            });
+        }
+
+        for &i in &missing {
+            if i == first_chunk {
+                continue;
+            }
+            let (chunk_tx, chunk_rx) = oneshot::channel();
+            chunk_rxs.insert(i, chunk_rx);
+
+            let client = client.clone();
+            let backend = backend.clone();
+            let metadata = metadata.clone();
+            let url = url.clone();
+            let sem = sem.clone();
+            let fname = fname.clone();
+
+            tokio::spawn(async move {
+                let _permit = sem.acquire().await;
+                let result = Self::do_download_chunk(
+                    client,
+                    url,
+                    i,
+                    total_size,
+                    backend,
+                    metadata,
+                    file_id,
+                    fname,
+                    chunk_count,
+                )
+                .await;
+                let _ = chunk_tx.send(result);
+            });
+        }
+
+        tokio::spawn(async move {
+            let mut byte_offset = first_chunk as u64 * chunk_size_u64;
+            for i in first_chunk..=last_chunk {
+                let raw: Vec<u8> = if let Some(rx) = chunk_rxs.remove(&i) {
+                    match rx.await {
+                        Ok(Ok(b)) => b.to_vec(),
+                        Ok(Err(e)) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                        Err(_) => {
                             let _ = tx
-                                .send(Err(anyhow::anyhow!(
-                                    "chunk {} download error: {}",
-                                    i,
-                                    e
-                                )))
+                                .send(Err(anyhow::anyhow!("chunk {} task panicked", i)))
                                 .await;
                             return;
                         }
-                    },
-                    Err(e) => {
-                        let _ = tx
-                            .send(Err(anyhow::anyhow!(
-                                "chunk {} request error: {}",
-                                i,
-                                e
-                            )))
-                            .await;
-                        return;
                     }
+                } else if let Some(sha) = cached_sha.get(&i) {
+                    match backend.get(sha).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            let _ = tx
+                                .send(Err(anyhow::anyhow!("cached chunk {} read error: {}", i, e)))
+                                .await;
+                            return;
+                        }
+                    }
+                } else {
+                    let _ = tx
+                        .send(Err(anyhow::anyhow!(
+                            "chunk {} not cached and not downloading",
+                            i
+                        )))
+                        .await;
+                    return;
                 };
 
-                let sha256 = chunker::sha256_hex(&data);
+                let chunk_start = byte_offset;
+                let chunk_end = byte_offset + raw.len() as u64 - 1;
 
-                let stored_size: i64 =
-                    if !backend.exists(&sha256).await.unwrap_or(false) {
-                        match backend.put(&sha256, &data).await {
-                            Ok(sz) => sz as i64,
-                            Err(e) => {
-                                let _ = tx.send(Err(e)).await;
-                                return;
-                            }
-                        }
-                    } else {
-                        data.len() as i64
-                    };
+                let sl_start = if req_start > chunk_start {
+                    (req_start - chunk_start) as usize
+                } else {
+                    0
+                };
+                let sl_end = if req_end < chunk_end {
+                    (req_end - chunk_start + 1) as usize
+                } else {
+                    raw.len()
+                };
 
-                let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
-                if let Err(e) = metadata.ensure_trunk(
-                    &sha256,
-                    "local",
-                    &path,
-                    data.len() as i64,
-                    stored_size,
-                ) {
-                    let _ = tx.send(Err(e)).await;
+                let bytes = Bytes::from(raw[sl_start..sl_end].to_vec());
+                if tx.send(Ok(bytes)).await.is_err() {
                     return;
                 }
 
-                if let Err(e) =
-                    metadata.link_file_trunk(file_id, &sha256, i as i64, data.len() as i64)
-                {
-                    let _ = tx.send(Err(e)).await;
-                    return;
-                }
-
-                tracing::info!(
-                    "{} chunk {}/{} done ({} bytes)",
-                    fname,
-                    i + 1,
-                    chunk_count,
-                    data.len()
-                );
-
-                if tx.send(Ok(data)).await.is_err() {
-                    return;
-                }
+                byte_offset += raw.len() as u64;
             }
-
             let _ = metadata.touch_repo(&frepo);
         });
 
-        Ok((file, total_size, ReceiverStream::new(rx)))
+        Ok((file, content_length, ReceiverStream::new(rx)))
+    }
+
+    async fn stream_small_file(
+        &self,
+        url: &str,
+        name: &str,
+        file: &File,
+        total_size: u64,
+    ) -> anyhow::Result<(File, u64, ByteStream)> {
+        if self.is_file_complete(name).await? {
+            return self.stream_cached_file(name, None, None).await;
+        }
+
+        let repo = file.repo.clone();
+        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
+        let client = self.http_client.clone();
+        let url = url.to_string();
+        let svc = self.clone();
+        let fname = name.to_string();
+        let frepo = repo.clone();
+
+        tokio::spawn(async move {
+            let data = match client.get(&url).send().await {
+                Ok(resp) => match resp.bytes().await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = tx.send(Err(anyhow::anyhow!("download error: {}", e))).await;
+                        return;
+                    }
+                },
+                Err(e) => {
+                    let _ = tx.send(Err(anyhow::anyhow!("request error: {}", e))).await;
+                    return;
+                }
+            };
+
+            if let Err(e) = svc.upload(&fname, &frepo, data.to_vec()).await {
+                let _ = tx.send(Err(e)).await;
+                return;
+            }
+            let _ = tx.send(Ok(data)).await;
+        });
+
+        Ok((file.clone(), total_size, ReceiverStream::new(rx)))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn do_download_chunk(
+        client: reqwest::Client,
+        url: String,
+        i: usize,
+        total_size: u64,
+        backend: Arc<dyn crate::storage::StorageBackend>,
+        metadata: Arc<MetadataStore>,
+        file_id: i64,
+        fname: String,
+        chunk_count: usize,
+    ) -> Result<Bytes, anyhow::Error> {
+        let start = (i * CHUNK_SIZE) as u64;
+        let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
+        let range_header = format!("bytes={}-{}", start, end);
+
+        let data = client
+            .get(&url)
+            .header("Range", &range_header)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("chunk {} request error: {}", i, e))?
+            .bytes()
+            .await
+            .map_err(|e| anyhow::anyhow!("chunk {} download error: {}", i, e))?;
+
+        let sha256 = chunker::sha256_hex(&data);
+
+        let stored_size: i64 = if !backend.exists(&sha256).await.unwrap_or(false) {
+            backend.put(&sha256, &data).await? as i64
+        } else {
+            data.len() as i64
+        };
+
+        let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
+        metadata.ensure_trunk(&sha256, "local", &path, data.len() as i64, stored_size)?;
+
+        metadata.link_file_trunk(file_id, &sha256, i as i64, data.len() as i64)?;
+
+        tracing::info!(
+            "{} chunk {}/{} done ({} bytes)",
+            fname,
+            i + 1,
+            chunk_count,
+            data.len()
+        );
+
+        Ok(data)
     }
 }

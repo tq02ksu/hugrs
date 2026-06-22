@@ -114,8 +114,7 @@ async fn model_info_revision(
         let service = state.service.lock().await;
         if let Ok(Some((status, headers, body))) = service.get_http_cache(&url) {
             tracing::info!("model_info cache hit: {}", url);
-            let status = StatusCode::from_u16(status)
-                .unwrap_or(StatusCode::OK);
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
             let mut builder = Response::builder().status(status);
             for line in headers.lines() {
                 if let Some(col) = line.find(':') {
@@ -124,7 +123,8 @@ async fn model_info_revision(
                     builder = builder.header(name, value);
                 }
             }
-            return builder.body(body.into())
+            return builder
+                .body(body.into())
                 .map_err(|e| AppError::Anyhow(e.into()));
         }
         drop(service);
@@ -143,7 +143,11 @@ async fn model_info_revision(
         .filter(|(n, _)| *n != "transfer-encoding")
         .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
-    let body = resp.text().await.map_err(|e| AppError::Anyhow(e.into()))?.into_bytes();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| AppError::Anyhow(e.into()))?
+        .into_bytes();
 
     let headers_text = upstream_headers
         .iter()
@@ -161,7 +165,8 @@ async fn model_info_revision(
     for (name, value) in &upstream_headers {
         builder = builder.header(name, value);
     }
-    builder.body(body.into())
+    builder
+        .body(body.into())
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
@@ -174,7 +179,16 @@ async fn file_resolve(
     let repo_id = format!("{}/{}", org, repo);
     let cache_name = format!("{}/{}", repo_id, path);
     let range = parse_range(&headers);
-    serve_file(&state, method, &repo_id, &cache_name, &revision, &path, range).await
+    serve_file(
+        &state,
+        method,
+        &repo_id,
+        &cache_name,
+        &revision,
+        &path,
+        range,
+    )
+    .await
 }
 
 async fn resolve_cache(
@@ -186,7 +200,16 @@ async fn resolve_cache(
     let repo_id = format!("{}/{}", org, repo);
     let cache_name = format!("{}/{}", repo_id, path);
     let range = parse_range(&headers);
-    serve_file(&state, method, &repo_id, &cache_name, &revision, &path, range).await
+    serve_file(
+        &state,
+        method,
+        &repo_id,
+        &cache_name,
+        &revision,
+        &path,
+        range,
+    )
+    .await
 }
 
 async fn serve_file(
@@ -196,7 +219,7 @@ async fn serve_file(
     cache_name: &str,
     revision: &str,
     path: &str,
-    range: Option<(u64, u64)>,
+    range: Option<(u64, Option<u64>)>,
 ) -> Result<Response, AppError> {
     tracing::debug!("{} {} cache={}", method, cache_name, cache_name);
 
@@ -208,40 +231,64 @@ async fn serve_file(
     if method == Method::HEAD {
         let service = state.service.lock().await;
         if let Ok(Some(file)) = service.info(cache_name).await {
-            tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
-            return build_head_response(&file, path);
+            if file.x_repo_commit.is_some() {
+                tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
+                return build_head_response(&file, path);
+            }
+            tracing::debug!(
+                "HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}",
+                cache_name
+            );
         }
         drop(service);
 
         tracing::info!("HEAD proxy to upstream: {}", url);
-        let resp = state.head_client.head(&url).send().await
+        let resp = state
+            .head_client
+            .head(&url)
+            .send()
+            .await
             .map_err(|e| AppError::Anyhow(e.into()))?;
         let status = resp.status();
         let first_headers = resp.headers();
 
         tracing::info!("HEAD upstream response: status={}", status);
 
-        let x_repo_commit = first_headers.get("x-repo-commit")
-            .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+        let x_repo_commit = first_headers
+            .get("x-repo-commit")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
         let xl_size: Option<i64> = first_headers
             .get("x-linked-size")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
-        let x_linked_etag = first_headers.get("x-linked-etag")
-            .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+        let x_linked_etag = first_headers
+            .get("x-linked-etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
         let (total_size, etag, content_type) = if status.is_redirection() {
-            let location = first_headers.get("location").and_then(|v| v.to_str().ok()).unwrap_or("");
+            let location = first_headers
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
             tracing::info!("HEAD following redirect: {}", location);
             match state.http_client.head(location).send().await {
                 Ok(resp2) => {
                     let h = resp2.headers();
-                    let cl: u64 = h.get("content-length")
+                    let cl: u64 = h
+                        .get("content-length")
                         .and_then(|v| v.to_str().ok())
                         .and_then(|v| v.parse().ok())
                         .unwrap_or(0);
-                    let et = h.get("etag").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-                    let ct = h.get("content-type").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+                    let et = h
+                        .get("etag")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                    let ct = h
+                        .get("content-type")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
                     (cl, et, ct)
                 }
                 Err(e) => {
@@ -250,22 +297,39 @@ async fn serve_file(
                 }
             }
         } else {
-            let cl: u64 = first_headers.get("content-length")
+            let cl: u64 = first_headers
+                .get("content-length")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
-            let et = first_headers.get("etag").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-            let ct = first_headers.get("content-type").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+            let et = first_headers
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            let ct = first_headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
             (cl, et, ct)
         };
 
-        let size = if total_size > 0 { total_size } else { xl_size.unwrap_or(0) as u64 };
+        let size = if total_size > 0 {
+            total_size
+        } else {
+            xl_size.unwrap_or(0) as u64
+        };
 
         if size > 0 {
             let service = state.service.lock().await;
             service.ensure_file_headers(
-                cache_name, repo_id, size,
-                etag.as_deref(), x_repo_commit.as_deref(), xl_size, x_linked_etag.as_deref(), content_type.as_deref(),
+                cache_name,
+                repo_id,
+                size,
+                etag.as_deref(),
+                x_repo_commit.as_deref(),
+                xl_size,
+                x_linked_etag.as_deref(),
+                content_type.as_deref(),
             )?;
             tracing::info!("cached HEAD metadata for {} ({} bytes)", cache_name, size);
         }
@@ -291,7 +355,8 @@ async fn serve_file(
             builder = builder.header("X-Linked-ETag", le.as_str());
         }
         tracing::info!("HEAD returning 200 (size={})", size);
-        return builder.body(axum::body::Body::empty())
+        return builder
+            .body(axum::body::Body::empty())
             .map_err(|e| AppError::Anyhow(e.into()));
     }
 
@@ -300,11 +365,7 @@ async fn serve_file(
         if service.is_file_complete(cache_name).await.unwrap_or(false) {
             tracing::debug!("GET cache hit (streaming): {}", cache_name);
             let (file, content_length, stream) = service
-                .stream_cached_file(
-                    cache_name,
-                    range.map(|r| r.0),
-                    range.map(|r| r.1),
-                )
+                .stream_cached_file(cache_name, range.map(|r| r.0), range.and_then(|r| r.1))
                 .await?;
             return build_stream_response(file, content_length, stream, path, range);
         }
@@ -318,16 +379,19 @@ async fn serve_file(
     };
 
     let (file, content_length, stream) = svc
-        .stream_from_upstream(&url, cache_name, repo_id)
+        .stream_from_upstream(
+            &url,
+            cache_name,
+            repo_id,
+            range.map(|r| r.0),
+            range.and_then(|r| r.1),
+        )
         .await?;
 
     build_stream_response(file, content_length, stream, path, range)
 }
 
-fn build_head_response(
-    file: &crate::metadata::File,
-    path: &str,
-) -> Result<Response, AppError> {
+fn build_head_response(file: &crate::metadata::File, path: &str) -> Result<Response, AppError> {
     let filename = std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
@@ -364,18 +428,20 @@ fn build_head_response(
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
-fn parse_range(headers: &HeaderMap) -> Option<(u64, u64)> {
+fn parse_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
     let range = headers.get("range")?.to_str().ok()?;
     let range = range.strip_prefix("bytes=")?;
     let (start, end) = range.split_once('-')?;
     let start: u64 = start.parse().ok()?;
-    let end: u64 = if end.is_empty() {
-        return None;
+    let end: Option<u64> = if end.is_empty() {
+        None
     } else {
-        end.parse().ok()?
+        Some(end.parse().ok()?)
     };
-    if start > end {
-        return None;
+    if let Some(end_val) = end {
+        if start > end_val {
+            return None;
+        }
     }
     Some((start, end))
 }
@@ -385,7 +451,7 @@ fn build_stream_response(
     content_length: u64,
     stream: crate::service::ByteStream,
     path: &str,
-    range: Option<(u64, u64)>,
+    range: Option<(u64, Option<u64>)>,
 ) -> Result<Response, AppError> {
     let filename = std::path::Path::new(path)
         .file_name()
@@ -411,9 +477,12 @@ fn build_stream_response(
         .header("Accept-Ranges", "bytes");
 
     if let Some((start, end)) = range {
+        let end_str = end
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "*".to_string());
         resp = resp.header(
             "Content-Range",
-            format!("bytes {}-{}/{}", start, end, file.total_size as u64),
+            format!("bytes {}-{}/{}", start, end_str, file.total_size as u64),
         );
     }
 
@@ -433,8 +502,7 @@ fn build_stream_response(
         resp = resp.header("X-Linked-ETag", linked_etag);
     }
 
-    resp.body(body)
-        .map_err(|e| AppError::Anyhow(e.into()))
+    resp.body(body).map_err(|e| AppError::Anyhow(e.into()))
 }
 
 async fn agent_harnesses(State(state): State<AppState>) -> Result<Response, AppError> {

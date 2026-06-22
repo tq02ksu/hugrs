@@ -14,7 +14,13 @@ async fn test_upload_and_download() {
         dir.path().join("trunks"),
         Compression::None,
     ));
-    let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
+    let service = CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+    );
 
     let data = b"hello hugrs cache service";
     service
@@ -43,7 +49,13 @@ async fn test_delete_and_gc() {
         dir.path().join("trunks"),
         Compression::None,
     ));
-    let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
+    let service = CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+    );
 
     service
         .upload("x.bin", "repo-a", vec![1, 2, 3])
@@ -67,7 +79,13 @@ async fn test_stats() {
         dir.path().join("trunks"),
         Compression::None,
     ));
-    let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
+    let service = CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+    );
 
     let stats = service.stats().await.unwrap();
     assert_eq!(stats.file_count, 0);
@@ -91,7 +109,13 @@ async fn test_upload_duplicate_file_overwrites() {
         dir.path().join("trunks"),
         Compression::None,
     ));
-    let service = CacheService::new(metadata, backend, None, reqwest::Client::new());
+    let service = CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+    );
 
     service
         .upload("dup.bin", "repo-a", vec![1, 2, 3])
@@ -115,7 +139,13 @@ async fn test_lru_eviction() {
         dir.path().join("trunks"),
         Compression::None,
     ));
-    let service = CacheService::new(metadata, backend, Some(300), reqwest::Client::new());
+    let service = CacheService::new(
+        metadata,
+        backend,
+        Some(300),
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+    );
 
     service
         .upload("big.bin", "repo-big", vec![0u8; 250])
@@ -141,7 +171,13 @@ async fn test_lru_eviction_by_repo() {
         dir.path().join("trunks"),
         Compression::None,
     ));
-    let service = CacheService::new(metadata, backend, Some(250), reqwest::Client::new());
+    let service = CacheService::new(
+        metadata,
+        backend,
+        Some(250),
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+    );
 
     service
         .upload("a.txt", "repo-a", vec![1u8; 100])

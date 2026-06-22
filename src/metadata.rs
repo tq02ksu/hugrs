@@ -436,8 +436,8 @@ impl MetadataStore {
 
     pub fn get_http_cache(&self, url: &str) -> anyhow::Result<Option<(u16, String, Vec<u8>)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT status, headers, body FROM http_cache WHERE url = ?1")?;
+        let mut stmt =
+            conn.prepare("SELECT status, headers, body FROM http_cache WHERE url = ?1")?;
         let mut rows = stmt.query_map(params![url], |row| {
             Ok((
                 row.get::<_, i64>(0)? as u16,

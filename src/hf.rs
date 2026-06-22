@@ -85,8 +85,7 @@ pub fn build_client(config: &Config) -> anyhow::Result<reqwest::Client> {
 }
 
 pub fn build_head_client(config: &Config) -> anyhow::Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none());
+     let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
 
     if let Some(ref proxy_url) = config.huggingface.proxy {
         let proxy = reqwest::Proxy::all(proxy_url)?;
