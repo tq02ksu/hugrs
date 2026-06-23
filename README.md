@@ -39,7 +39,7 @@ cargo run -- gc
 
 ## Configuration
 
-[📖 完整配置文档 →](docs/CONFIG.md)
+[📖 Full Configuration Docs →](docs/CONFIG.md)
 
 Config priority (highest to lowest): CLI flags > env vars > `.env` file > `hugrs.toml` > defaults
 

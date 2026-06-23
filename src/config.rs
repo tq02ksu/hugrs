@@ -222,6 +222,12 @@ impl Config {
         if let Ok(val) = std::env::var("HUGRS_MAX_SIZE") {
             config.storage.max_size = Some(val.parse()?);
         }
+        if let Ok(val) = std::env::var("HUGRS_PREFETCH_DEPTH") {
+            config.storage.prefetch_depth = val.parse()?;
+        }
+        if let Ok(val) = std::env::var("HUGRS_VERIFY_SHA256") {
+            config.storage.verify_sha256 = val.parse()?;
+        }
         if let Ok(val) = std::env::var("HUGRS_DB_PATH") {
             config.database.path = val.into();
         }

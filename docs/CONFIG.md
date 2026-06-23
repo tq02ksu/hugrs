@@ -1,25 +1,25 @@
-# HugRS 配置文档
+# HugRS Configuration
 
-## 配置加载优先级
+## Loading Priority
 
-配置按以下顺序加载，**后者覆盖前者**：
+Config is loaded in this order, **later overrides earlier**:
 
 ```
-默认值  →  hugrs.toml  →  .env  →  环境变量  →  CLI 参数
-（最低）                                                      （最高）
+defaults  →  hugrs.toml  →  .env  →  env vars  →  CLI flags
+(lowest)                                                (highest)
 ```
 
-## 配置方式一览
+## Configuration Methods
 
-| 方式 | 格式 | 说明 |
-|------|------|------|
-| 默认值 | — | 开箱即用，无需任何配置 |
-| `hugrs.toml` | TOML | 先找 `./hugrs.toml`，没有则找 `~/.config/hugrs/hugrs.toml`，可通过 `-c` 强制指定 |
-| `.env` | KEY=VALUE | 当前目录下的环境文件 |
-| 环境变量 | `HUGRS_*` | 系统环境变量 |
-| CLI 参数 | `--xxx` | 命令行全局参数，作用于所有子命令 |
+| Method | Format | Notes |
+|--------|--------|-------|
+| Defaults | — | Works out of the box |
+| `hugrs.toml` | TOML | Tries `./hugrs.toml`, then `~/.config/hugrs/hugrs.toml`. Use `-c` to override |
+| `.env` | KEY=VALUE | Environment file in the current directory |
+| Env vars | `HUGRS_*` | System environment variables |
+| CLI flags | `--xxx` | Global flags, apply to all subcommands |
 
-### 示例：max_size 的四种配置方式
+### Example: 4 ways to set `max_size`
 
 ```bash
 # 1. hugrs.toml
@@ -29,55 +29,58 @@ max_size = 10737418240  # 10GB
 # 2. .env
 HUGRS_MAX_SIZE=10737418240
 
-# 3. 环境变量
+# 3. Env var
 export HUGRS_MAX_SIZE=10737418240
 
-# 4. CLI 参数
+# 4. CLI flag
 hugrs --max-size 10737418240 serve
 ```
 
 ---
 
-## 全部配置项
+## All Configuration Options
 
-### `[storage]` — 存储配置
+### `[storage]` — Storage
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | `--storage-backend` | 存储后端：`local` 或 `s3` |
-| `local_root` | path | `~/.cache/hugrs/trunks` | `HUGRS_LOCAL_ROOT` | `--local-root` | 本地存储根目录 |
-| `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | `--s3-bucket` | S3 bucket 名称（backend=s3 时必填） |
-| `s3_region` | string | — | `HUGRS_S3_REGION` | `--s3-region` | S3 区域（backend=s3 时必填） |
-| `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | `--s3-prefix` | S3 key 前缀，如 `"hugrs/cache"` |
-| `s3_endpoint` | string | — | `HUGRS_S3_ENDPOINT` | `--s3-endpoint` | S3 兼容端点 URL（MinIO 等） |
-| `max_size` | integer | — | `HUGRS_MAX_SIZE` | `--max-size` | 最大磁盘占用（字节），超出触发 LRU 淘汰 |
+| Key | Type | Default | Env Var | CLI Flag | Description |
+|-----|------|---------|---------|----------|-------------|
+| `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | `--storage-backend` | Storage backend: `local` or `s3` |
+| `local_root` | path | `~/.cache/hugrs/trunks` | `HUGRS_LOCAL_ROOT` | `--local-root` | Local storage root directory |
+| `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | `--s3-bucket` | S3 bucket name (required for `backend=s3`) |
+| `s3_region` | string | — | `HUGRS_S3_REGION` | `--s3-region` | S3 region (required for `backend=s3`) |
+| `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | `--s3-prefix` | S3 key prefix, e.g. `"hugrs/cache"` |
+| `s3_endpoint` | string | — | `HUGRS_S3_ENDPOINT` | `--s3-endpoint` | S3-compatible endpoint URL (MinIO, etc.) |
+| `max_size` | integer | — | `HUGRS_MAX_SIZE` | `--max-size` | Max disk usage in bytes. Triggers LRU eviction when exceeded |
+| `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | `--compression` | Trunk compression: `zstd` or `none` |
+| `prefetch_depth` | integer | `0` (auto=CPU cores) | `HUGRS_PREFETCH_DEPTH` | `--prefetch-depth` | Cache read prefetch depth. `0`=auto (max 16). Range 1–16 |
+| `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | `--enable-sha256-verify` | Validate SHA256 on cached reads. Disable for higher throughput |
 
-### `[database]` — 数据库配置
+### `[database]` — Database
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | `--db-path` | SQLite 数据库文件路径 |
+| Key | Type | Default | Env Var | CLI Flag | Description |
+|-----|------|---------|---------|----------|-------------|
+| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | `--db-path` | SQLite database path |
 
-### `[server]` — HTTP 服务配置
+### `[server]` — HTTP Server
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `host` | string | `"127.0.0.1"` | `HUGRS_SERVER_HOST` | `--server-host` | 监听地址 |
-| `port` | integer | `3000` | `HUGRS_SERVER_PORT` | `--server-port` | 监听端口 |
+| Key | Type | Default | Env Var | CLI Flag | Description |
+|-----|------|---------|---------|----------|-------------|
+| `host` | string | `"127.0.0.1"` | `HUGRS_SERVER_HOST` | `--server-host` | Listen address |
+| `port` | integer | `3000` | `HUGRS_SERVER_PORT` | `--server-port` | Listen port |
 
-### `[huggingface]` — HuggingFace Hub 配置
+### `[huggingface]` — HuggingFace Hub
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | `--hf-endpoint` | HF Hub 地址，可设为 `https://hf-mirror.com` |
-| `token` | string | — | `HUGRS_HF_TOKEN` | `--hf-token` | HF API Token（访问私有/受限模型） |
-| `proxy` | string | — | `HUGRS_HF_PROXY` | `--hf-proxy` | HTTP 代理地址，如 `http://proxy:8080` |
+| Key | Type | Default | Env Var | CLI Flag | Description |
+|-----|------|---------|---------|----------|-------------|
+| `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | `--hf-endpoint` | HF Hub URL, e.g. `https://hf-mirror.com` |
+| `token` | string | — | `HUGRS_HF_TOKEN` | `--hf-token` | HF API token for private/gated models |
+| `proxy` | string | — | `HUGRS_HF_PROXY` | `--hf-proxy` | HTTP proxy, e.g. `http://proxy:8080` |
 
 ---
 
-## 配置模板
+## Config Templates
 
-### 本地存储（最小配置，什么都不写也行）
+### Local storage (minimal — works with defaults)
 
 ```toml
 # hugrs.toml
@@ -96,7 +99,7 @@ port = 3000
 endpoint = "https://huggingface.co"
 ```
 
-### 生产环境（S3 + 镜像站 + 代理 + 容量限制）
+### Production (S3 + mirror + proxy + capacity limit)
 
 ```toml
 # hugrs.toml
@@ -119,7 +122,19 @@ endpoint = "https://hf-mirror.com"
 proxy = "http://proxy.internal:8080"
 ```
 
-### MinIO / 自建 S3 兼容存储
+### High-performance local cache
+
+```toml
+# hugrs.toml
+[storage]
+backend = "local"
+compression = "none"
+prefetch_depth = 16
+verify_sha256 = false
+max_size = 107374182400
+```
+
+### MinIO / self-hosted S3
 
 ```toml
 [storage]
@@ -130,13 +145,16 @@ s3_endpoint = "http://localhost:9000"
 s3_prefix = "cache"
 ```
 
-### 仅用环境变量（适合 Docker）
+### Env vars only (Docker-friendly)
 
 ```bash
 HUGRS_STORAGE_BACKEND=s3
 HUGRS_S3_BUCKET=my-bucket
 HUGRS_S3_REGION=us-east-1
 HUGRS_MAX_SIZE=53687091200       # 50GB
+HUGRS_COMPRESSION=none
+HUGRS_PREFETCH_DEPTH=8
+HUGRS_VERIFY_SHA256=false
 HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=8080
 HUGRS_HF_ENDPOINT=https://hf-mirror.com
@@ -145,46 +163,52 @@ HUGRS_HF_PROXY=http://proxy:3128
 
 ---
 
-## CLI 全局参数速查
+## CLI Global Flags
 
-所有子命令均接受以下全局参数：
+All subcommands accept these global flags:
 
 ```
-hugrs [全局参数] <子命令>
+hugrs [GLOBAL FLAGS] <SUBCOMMAND>
 
-全局参数:
-  -c, --config <FILE>          配置文件路径（默认 hugrs.toml）
-      --db-path <PATH>         数据库路径
-      --storage-backend <BE>   存储后端: local | s3
-      --local-root <DIR>       本地存储目录
+Global Flags:
+  -c, --config <FILE>          Config file path (default: hugrs.toml)
+      --db-path <PATH>         Database path
+      --storage-backend <BE>   Storage backend: local | s3
+      --local-root <DIR>       Local storage directory
       --s3-bucket <NAME>       S3 bucket
       --s3-region <REGION>     S3 region
-      --s3-prefix <PREFIX>     S3 key 前缀
-      --s3-endpoint <URL>      S3 端点 URL
-      --server-host <HOST>     服务监听地址
-      --server-port <PORT>     服务监听端口
-      --hf-endpoint <URL>      HF Hub 地址
-      --hf-token <TOKEN>       HF API Token
-      --hf-proxy <URL>         HTTP 代理
-      --max-size <BYTES>       最大磁盘占用
+      --s3-prefix <PREFIX>     S3 key prefix
+      --s3-endpoint <URL>      S3 endpoint URL
+      --compression <MODE>     Trunk compression: zstd | none
+      --max-size <BYTES>       Max disk usage
+      --prefetch-depth <N>     Cache read prefetch depth (0=auto)
+      --enable-sha256-verify <BOOL>  Enable SHA256 validation on cached reads
+      --server-host <HOST>     Listen address
+      --server-port <PORT>     Listen port
+      --hf-endpoint <URL>      HF Hub URL
+      --hf-token <TOKEN>       HF API token
+      --hf-proxy <URL>         HTTP proxy
 
-子命令:
-  upload   上传文件
-  pull     从 HuggingFace 拉取模型
-  list     列出缓存文件
-  info     查看文件详情
-  stats    查看缓存统计
-  gc       垃圾回收
-  serve    启动 HTTP 服务
+Subcommands:
+  upload     Upload a file
+  pull       Pull a model from HuggingFace
+  list       List cached files
+  info       Show file details
+  stats      Show cache statistics
+  gc         Garbage-collect orphaned trunks
+  serve      Start HTTP server
 ```
 
-## .env 文件示例
+## `.env` File Example
 
 ```bash
 # .env
 HUGRS_STORAGE_BACKEND=local
 HUGRS_LOCAL_ROOT=/data/hugrs/trunks
 HUGRS_DB_PATH=/data/hugrs/hugrs.db
+HUGRS_COMPRESSION=none
+HUGRS_PREFETCH_DEPTH=8
+HUGRS_VERIFY_SHA256=true
 HUGRS_MAX_SIZE=107374182400
 HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=3000
