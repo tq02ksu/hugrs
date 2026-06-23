@@ -54,11 +54,11 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
 }
 
 #[derive(Clone)]
-struct AppState {
-    service: Arc<Mutex<CacheService>>,
-    config: Arc<Config>,
-    http_client: Arc<reqwest::Client>,
-    head_client: Arc<reqwest::Client>,
+pub struct AppState {
+    pub service: Arc<Mutex<CacheService>>,
+    pub config: Arc<Config>,
+    pub http_client: Arc<reqwest::Client>,
+    pub head_client: Arc<reqwest::Client>,
 }
 
 #[derive(Serialize)]
@@ -170,7 +170,7 @@ async fn model_info_revision(
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
-async fn file_resolve(
+pub async fn file_resolve(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
@@ -272,6 +272,7 @@ async fn serve_file(
                 .get("location")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
+            let location = resolve_redirect(&url, location);
             tracing::info!("HEAD following redirect: {}", location);
             match state.http_client.head(location).send().await {
                 Ok(resp2) => {
@@ -428,6 +429,33 @@ fn build_head_response(file: &crate::metadata::File, path: &str) -> Result<Respo
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
+pub fn resolve_redirect(base_url: &str, location: &str) -> String {
+    if location.is_empty() {
+        return base_url.to_string();
+    }
+    // Absolute URL
+    if location.contains("://") {
+        return location.to_string();
+    }
+    // Absolute path
+    if location.starts_with('/') {
+        if let Some(pos) = base_url.find("://") {
+            let scheme_end = base_url[pos + 3..].find('/').map(|p| pos + 3 + p);
+            if let Some(host_end) = scheme_end {
+                return format!("{}{}", &base_url[..host_end], location);
+            }
+            return format!("{}{}", base_url, location);
+        }
+        return format!("{}{}", base_url, location);
+    }
+    // Relative path: resolve against the directory of the base URL
+    let base_dir = match base_url.rfind('/') {
+        Some(pos) if pos > base_url.find("://").map(|p| p + 3).unwrap_or(0) => &base_url[..pos],
+        _ => base_url,
+    };
+    format!("{}/{}", base_dir, location)
+}
+
 fn parse_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
     let range = headers.get("range")?.to_str().ok()?;
     let range = range.strip_prefix("bytes=")?;
@@ -525,7 +553,7 @@ async fn proxy_json(state: &AppState, url: &str) -> Result<Response, AppError> {
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
-enum AppError {
+pub enum AppError {
     Anyhow(anyhow::Error),
 }
 

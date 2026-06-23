@@ -45,7 +45,7 @@ impl CacheService {
             http_client,
             head_client,
             download_locks: Arc::new(StdMutex::new(HashMap::new())),
-            download_sem: Arc::new(Semaphore::new(16)),
+            download_sem: Arc::new(Semaphore::new(128)),
         }
     }
 
@@ -139,8 +139,9 @@ impl CacheService {
                 .get("location")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
+            let location = crate::server::resolve_redirect(url, location);
             tracing::info!("download_from_url following redirect: {}", location);
-            let resp2 = self.http_client.head(location).send().await?;
+            let resp2 = self.http_client.head(&location).send().await?;
             let h = resp2.headers();
             let cl: u64 = h
                 .get("content-length")
@@ -637,6 +638,7 @@ impl CacheService {
                 .get("location")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
+            let location = crate::server::resolve_redirect(url, location);
             tracing::info!("stream_from_upstream following redirect: {}", location);
             match self.http_client.head(location).send().await {
                 Ok(resp2) => {
@@ -782,37 +784,10 @@ impl CacheService {
         let mut chunk_rxs: HashMap<usize, oneshot::Receiver<Result<Bytes, anyhow::Error>>> =
             HashMap::new();
 
-        if missing.contains(&first_chunk) {
-            let (chunk_tx, chunk_rx) = oneshot::channel();
-            chunk_rxs.insert(first_chunk, chunk_rx);
+        let prefetch_count = 32usize;
+        let missing_set: Arc<HashSet<usize>> = Arc::new(missing.iter().copied().collect());
 
-            let client = client.clone();
-            let backend = backend.clone();
-            let metadata = metadata.clone();
-            let url = url.clone();
-            let fname = fname.clone();
-
-            tokio::spawn(async move {
-                let result = Self::do_download_chunk(
-                    client,
-                    url,
-                    first_chunk,
-                    total_size,
-                    backend,
-                    metadata,
-                    file_id,
-                    fname,
-                    chunk_count,
-                )
-                .await;
-                let _ = chunk_tx.send(result);
-            });
-        }
-
-        for &i in &missing {
-            if i == first_chunk {
-                continue;
-            }
+        for &i in missing.iter().take(prefetch_count) {
             let (chunk_tx, chunk_rx) = oneshot::channel();
             chunk_rxs.insert(i, chunk_rx);
 
@@ -841,6 +816,14 @@ impl CacheService {
             });
         }
 
+        let missing_set_s = missing_set.clone();
+        let client_s = client.clone();
+        let backend_s = backend.clone();
+        let metadata_s = metadata.clone();
+        let url_s = url.clone();
+        let sem_s = sem.clone();
+        let fname_s = fname.clone();
+
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
             for i in first_chunk..=last_chunk {
@@ -859,7 +842,7 @@ impl CacheService {
                         }
                     }
                 } else if let Some(sha) = cached_sha.get(&i) {
-                    match backend.get(sha).await {
+                    match backend_s.get(sha).await {
                         Ok(d) => d,
                         Err(e) => {
                             let _ = tx
@@ -898,8 +881,41 @@ impl CacheService {
                 }
 
                 byte_offset += raw.len() as u64;
+
+                let next = i + prefetch_count;
+                if missing_set_s.contains(&next)
+                    && !chunk_rxs.contains_key(&next)
+                    && !cached_sha.contains_key(&next)
+                {
+                    let (chunk_tx, chunk_rx) = oneshot::channel();
+                    chunk_rxs.insert(next, chunk_rx);
+
+                    let client = client_s.clone();
+                    let backend = backend_s.clone();
+                    let metadata = metadata_s.clone();
+                    let url = url_s.clone();
+                    let sem = sem_s.clone();
+                    let fname = fname_s.clone();
+
+                    tokio::spawn(async move {
+                        let _permit = sem.acquire().await;
+                        let result = Self::do_download_chunk(
+                            client,
+                            url,
+                            next,
+                            total_size,
+                            backend,
+                            metadata,
+                            file_id,
+                            fname,
+                            chunk_count,
+                        )
+                        .await;
+                        let _ = chunk_tx.send(result);
+                    });
+                }
             }
-            let _ = metadata.touch_repo(&frepo);
+            let _ = metadata_s.touch_repo(&frepo);
         });
 
         Ok((file, content_length, ReceiverStream::new(rx)))

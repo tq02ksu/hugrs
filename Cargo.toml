@@ -31,3 +31,4 @@ zstd = "0.13"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tower = "0.5"
