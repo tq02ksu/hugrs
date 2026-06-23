@@ -43,6 +43,7 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
             "/api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{*path}",
             get(resolve_cache).head(resolve_cache),
         )
+        .route("/api/stats", get(stats))
         .route("/api/agent-harnesses", get(agent_harnesses))
         .layer(middleware::from_fn(log_request))
         .with_state(app_state);
@@ -531,6 +532,12 @@ fn build_stream_response(
     }
 
     resp.body(body).map_err(|e| AppError::Anyhow(e.into()))
+}
+
+async fn stats(State(state): State<AppState>) -> Result<Json<crate::metadata::Stats>, AppError> {
+    let service = state.service.lock().await;
+    let stats = service.stats().await.map_err(AppError::Anyhow)?;
+    Ok(Json(stats))
 }
 
 async fn agent_harnesses(State(state): State<AppState>) -> Result<Response, AppError> {

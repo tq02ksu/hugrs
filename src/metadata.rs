@@ -36,7 +36,7 @@ pub struct FileTrunk {
     pub chunk_size: i64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct Stats {
     pub repo_count: i64,
     pub file_count: i64,
@@ -421,10 +421,11 @@ impl MetadataStore {
             [],
             |row| row.get(0),
         )?;
-        let unique_size: i64 =
-            conn.query_row("SELECT COALESCE(SUM(size), 0) FROM trunks", [], |row| {
-                row.get(0)
-            })?;
+        let unique_size: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(COALESCE(compressed_size, size)), 0) FROM trunks",
+            [],
+            |row| row.get(0),
+        )?;
         Ok(Stats {
             repo_count,
             file_count,
