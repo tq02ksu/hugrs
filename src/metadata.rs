@@ -369,6 +369,20 @@ impl MetadataStore {
         Ok(result)
     }
 
+    pub fn is_chunk_linked(&self, file_id: i64, chunk_index: usize) -> anyhow::Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT sha256 FROM file_trunks WHERE file_id = ?1 AND chunk_index = ?2",
+            params![file_id, chunk_index as i64],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(sha) => Ok(Some(sha)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn list_files(&self) -> anyhow::Result<Vec<File>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(

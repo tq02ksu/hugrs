@@ -554,6 +554,7 @@ impl CacheService {
 
         let prefetch_depth = self.prefetch_depth;
         let verify_sha256 = self.verify_sha256;
+        let fname = name.to_string();
 
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
@@ -567,10 +568,21 @@ impl CacheService {
                     match h.await {
                         Ok(Ok(d)) => d,
                         Ok(Err(e)) => {
+                            tracing::warn!(
+                                "{}: prefetch stream aborted, chunk {} failed: {}",
+                                fname,
+                                ft.chunk_index,
+                                e
+                            );
                             let _ = tx.send(Err(e)).await;
                             return;
                         }
                         Err(_) => {
+                            tracing::warn!(
+                                "{}: prefetch stream aborted, chunk {} task panicked",
+                                fname,
+                                ft.chunk_index
+                            );
                             let _ = tx
                                 .send(Err(anyhow::anyhow!(
                                     "chunk {} pre-fetch panicked",
@@ -584,6 +596,12 @@ impl CacheService {
                     let raw = match backend.get(&ft.sha256).await {
                         Ok(d) => d,
                         Err(e) => {
+                            tracing::warn!(
+                                "{}: cached stream aborted, chunk {} read error: {}",
+                                fname,
+                                ft.chunk_index,
+                                e
+                            );
                             let _ = tx.send(Err(e)).await;
                             return;
                         }
@@ -856,7 +874,8 @@ impl CacheService {
             .collect();
 
         tracing::info!(
-            "{} streaming: chunks {}-{}/{} ({} cached, {} to download)",
+            "[s{}] {}: chunks {}-{}/{} ({} cached, {} to download)",
+            file_id,
             name,
             first_chunk,
             last_chunk,
@@ -871,14 +890,15 @@ impl CacheService {
         let metadata = self.metadata.clone();
         let client = self.http_client.clone();
         let url = url.to_string();
-        let sem = self.download_sem.clone();
+        let global_sem = self.download_sem.clone();
+        let file_sem = Arc::new(Semaphore::new(16));
         let fname = name.to_string();
         let frepo = repo.to_string();
 
         let mut chunk_rxs: HashMap<usize, oneshot::Receiver<Result<Bytes, anyhow::Error>>> =
             HashMap::new();
 
-        let prefetch_count = 32usize;
+        let prefetch_count = 4usize;
         let missing_set: Arc<HashSet<usize>> = Arc::new(missing.iter().copied().collect());
 
         for &i in missing.iter().take(prefetch_count) {
@@ -889,21 +909,15 @@ impl CacheService {
             let backend = backend.clone();
             let metadata = metadata.clone();
             let url = url.clone();
-            let sem = sem.clone();
+            let sem = global_sem.clone();
+            let fsem = file_sem.clone();
             let fname = fname.clone();
 
             tokio::spawn(async move {
+                let _file_permit = fsem.acquire().await;
                 let _permit = sem.acquire().await;
                 let result = Self::do_download_chunk(
-                    client,
-                    url,
-                    i,
-                    total_size,
-                    backend,
-                    metadata,
-                    file_id,
-                    fname,
-                    chunk_count,
+                    client, url, i, total_size, backend, metadata, file_id, fname, chunk_count,
                 )
                 .await;
                 let _ = chunk_tx.send(result);
@@ -915,8 +929,10 @@ impl CacheService {
         let backend_s = backend.clone();
         let metadata_s = metadata.clone();
         let url_s = url.clone();
-        let sem_s = sem.clone();
+        let sem_s = global_sem.clone();
+        let fsem_s = file_sem.clone();
         let fname_s = fname.clone();
+        let fid = file_id;
 
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
@@ -925,10 +941,23 @@ impl CacheService {
                     match rx.await {
                         Ok(Ok(b)) => b,
                         Ok(Err(e)) => {
+                            tracing::warn!(
+                                "[f{}] {}: streaming aborted, chunk {} download failed: {}",
+                                fid,
+                                fname_s,
+                                i,
+                                e
+                            );
                             let _ = tx.send(Err(e)).await;
                             return;
                         }
                         Err(_) => {
+                            tracing::warn!(
+                                "[f{}] {}: streaming aborted, chunk {} task panicked",
+                                fid,
+                                fname_s,
+                                i
+                            );
                             let _ = tx
                                 .send(Err(anyhow::anyhow!("chunk {} task panicked", i)))
                                 .await;
@@ -939,6 +968,13 @@ impl CacheService {
                     match backend_s.get(sha).await {
                         Ok(d) => Bytes::from(d),
                         Err(e) => {
+                            tracing::warn!(
+                                "[f{}] {}: cached stream aborted, chunk {} read error: {}",
+                                fid,
+                                fname_s,
+                                i,
+                                e
+                            );
                             let _ = tx
                                 .send(Err(anyhow::anyhow!("cached chunk {} read error: {}", i, e)))
                                 .await;
@@ -946,6 +982,12 @@ impl CacheService {
                         }
                     }
                 } else {
+                    tracing::warn!(
+                        "[f{}] {}: streaming aborted, chunk {} missing (neither cached nor downloading)",
+                        fid,
+                        fname_s,
+                        i
+                    );
                     let _ = tx
                         .send(Err(anyhow::anyhow!(
                             "chunk {} not cached and not downloading",
@@ -989,9 +1031,11 @@ impl CacheService {
                     let metadata = metadata_s.clone();
                     let url = url_s.clone();
                     let sem = sem_s.clone();
+                    let fsem = fsem_s.clone();
                     let fname = fname_s.clone();
 
                     tokio::spawn(async move {
+                        let _file_permit = fsem.acquire().await;
                         let _permit = sem.acquire().await;
                         let result = Self::do_download_chunk(
                             client,
@@ -1071,6 +1115,18 @@ impl CacheService {
         fname: String,
         chunk_count: usize,
     ) -> Result<Bytes, anyhow::Error> {
+        if let Some(sha) = metadata.is_chunk_linked(file_id, i)? {
+            let data = backend.get(&sha).await?;
+            tracing::info!(
+                "[f{}] {} chunk {}/{} already cached, skipping download",
+                file_id,
+                fname,
+                i + 1,
+                chunk_count
+            );
+            return Ok(Bytes::from(data));
+        }
+
         let start = (i * CHUNK_SIZE) as u64;
         let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
         let range_header = format!("bytes={}-{}", start, end);
@@ -1085,7 +1141,12 @@ impl CacheService {
             .await
             .map_err(|e| anyhow::anyhow!("chunk {} download error: {}", i, e))?;
 
-        let sha256 = chunker::sha256_hex(&data);
+        let (sha256, data) = tokio::task::spawn_blocking(move || {
+            let h = chunker::sha256_hex(&data);
+            (h, data)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("chunk {} sha256 panicked: {}", i, e))?;
 
         let stored_size: i64 = if !backend.exists(&sha256).await.unwrap_or(false) {
             backend.put(&sha256, &data).await? as i64
@@ -1099,7 +1160,8 @@ impl CacheService {
         metadata.link_file_trunk(file_id, &sha256, i as i64, data.len() as i64)?;
 
         tracing::info!(
-            "{} chunk {}/{} done ({} bytes)",
+            "[f{}] {} chunk {}/{} done ({} bytes)",
+            file_id,
             fname,
             i + 1,
             chunk_count,

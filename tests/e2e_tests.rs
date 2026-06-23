@@ -129,6 +129,8 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
             endpoint: upstream.to_string(),
             token: None,
             proxy: None,
+            timeout_secs: 120,
+            connect_timeout_secs: 15,
         },
     };
 

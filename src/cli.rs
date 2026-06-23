@@ -55,6 +55,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub enable_sha256_verify: Option<bool>,
 
+    #[arg(long, global = true)]
+    pub hf_timeout: Option<u64>,
+
+    #[arg(long, global = true)]
+    pub hf_connect_timeout: Option<u64>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -79,6 +85,8 @@ impl Cli {
             max_size: self.max_size,
             prefetch_depth: Some(self.prefetch_depth),
             enable_sha256_verify: self.enable_sha256_verify,
+            hf_timeout: self.hf_timeout,
+            hf_connect_timeout: self.hf_connect_timeout,
         }
     }
 }

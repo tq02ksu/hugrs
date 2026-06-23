@@ -73,6 +73,12 @@ pub struct HfConfig {
     pub token: Option<String>,
 
     pub proxy: Option<String>,
+
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
 }
 
 fn default_backend() -> String {
@@ -105,6 +111,12 @@ fn default_port() -> u16 {
 }
 fn default_hf_endpoint() -> String {
     "https://huggingface.co".into()
+}
+fn default_timeout_secs() -> u64 {
+    60
+}
+fn default_connect_timeout_secs() -> u64 {
+    15
 }
 
 impl Default for StorageConfig {
@@ -147,6 +159,8 @@ impl Default for HfConfig {
             endpoint: default_hf_endpoint(),
             token: None,
             proxy: None,
+            timeout_secs: default_timeout_secs(),
+            connect_timeout_secs: default_connect_timeout_secs(),
         }
     }
 }
@@ -164,6 +178,8 @@ pub struct CliOverrides {
     pub hf_endpoint: Option<String>,
     pub hf_token: Option<String>,
     pub hf_proxy: Option<String>,
+    pub hf_timeout: Option<u64>,
+    pub hf_connect_timeout: Option<u64>,
     pub config_file: Option<String>,
     pub compression: Option<String>,
     pub max_size: Option<u64>,
@@ -246,6 +262,12 @@ impl Config {
         if let Ok(val) = std::env::var("HUGRS_HF_PROXY") {
             config.huggingface.proxy = Some(val);
         }
+        if let Ok(val) = std::env::var("HUGRS_HF_TIMEOUT") {
+            config.huggingface.timeout_secs = val.parse()?;
+        }
+        if let Ok(val) = std::env::var("HUGRS_HF_CONNECT_TIMEOUT") {
+            config.huggingface.connect_timeout_secs = val.parse()?;
+        }
 
         if let Some(v) = overrides.db_path {
             config.database.path = v.into();
@@ -294,6 +316,12 @@ impl Config {
         }
         if let Some(v) = overrides.hf_proxy {
             config.huggingface.proxy = Some(v);
+        }
+        if let Some(v) = overrides.hf_timeout {
+            config.huggingface.timeout_secs = v;
+        }
+        if let Some(v) = overrides.hf_connect_timeout {
+            config.huggingface.connect_timeout_secs = v;
         }
 
         Ok(config)
