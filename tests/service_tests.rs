@@ -20,6 +20,8 @@ async fn test_upload_and_download() {
         None,
         reqwest::Client::new(),
         reqwest::Client::new(),
+        0,
+        true,
     );
 
     let data = b"hello hugrs cache service";
@@ -55,6 +57,8 @@ async fn test_delete_and_gc() {
         None,
         reqwest::Client::new(),
         reqwest::Client::new(),
+        0,
+        true,
     );
 
     service
@@ -85,6 +89,8 @@ async fn test_stats() {
         None,
         reqwest::Client::new(),
         reqwest::Client::new(),
+        0,
+        true,
     );
 
     let stats = service.stats().await.unwrap();
@@ -115,6 +121,8 @@ async fn test_upload_duplicate_file_overwrites() {
         None,
         reqwest::Client::new(),
         reqwest::Client::new(),
+        0,
+        true,
     );
 
     service
@@ -145,6 +153,8 @@ async fn test_lru_eviction() {
         Some(300),
         reqwest::Client::new(),
         reqwest::Client::new(),
+        0,
+        true,
     );
 
     service
@@ -177,6 +187,8 @@ async fn test_lru_eviction_by_repo() {
         Some(250),
         reqwest::Client::new(),
         reqwest::Client::new(),
+        0,
+        true,
     );
 
     service

@@ -34,6 +34,20 @@ pub struct StorageConfig {
     pub compression: Compression,
 
     pub max_size: Option<u64>,
+
+    #[serde(default = "default_prefetch_depth")]
+    pub prefetch_depth: usize,
+
+    #[serde(default = "default_verify_sha256")]
+    pub verify_sha256: bool,
+}
+
+fn default_prefetch_depth() -> usize {
+    0 // 0 means auto-detect (num CPUs, max 16)
+}
+
+fn default_verify_sha256() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +118,8 @@ impl Default for StorageConfig {
             s3_endpoint: None,
             compression: Compression::default(),
             max_size: None,
+            prefetch_depth: default_prefetch_depth(),
+            verify_sha256: default_verify_sha256(),
         }
     }
 }
@@ -151,6 +167,8 @@ pub struct CliOverrides {
     pub config_file: Option<String>,
     pub compression: Option<String>,
     pub max_size: Option<u64>,
+    pub prefetch_depth: Option<usize>,
+    pub enable_sha256_verify: Option<bool>,
 }
 
 impl Config {
@@ -249,6 +267,12 @@ impl Config {
         }
         if let Some(v) = overrides.max_size {
             config.storage.max_size = Some(v);
+        }
+        if let Some(v) = overrides.prefetch_depth {
+            config.storage.prefetch_depth = v;
+        }
+        if let Some(v) = overrides.enable_sha256_verify {
+            config.storage.verify_sha256 = v;
         }
         if let Some(v) = overrides.server_host {
             config.server.host = v;

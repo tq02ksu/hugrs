@@ -57,6 +57,8 @@ fn main() -> anyhow::Result<()> {
             config.storage.max_size,
             http_client,
             head_client,
+            config.storage.prefetch_depth,
+            config.storage.verify_sha256,
         );
 
         match cli.command {

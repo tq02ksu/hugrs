@@ -46,9 +46,9 @@ impl CacheService {
             let cpus = std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4);
-            cpus.min(16).max(1)
+            cpus.clamp(1, 16)
         } else {
-            prefetch_depth.min(16).max(1)
+            prefetch_depth.clamp(1, 16)
         };
         Self {
             metadata,
@@ -552,10 +552,11 @@ impl CacheService {
 
         let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 
+        let prefetch_depth = self.prefetch_depth;
+        let verify_sha256 = self.verify_sha256;
+
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
-            let prefetch_depth = self.prefetch_depth;
-            let verify_sha256 = self.verify_sha256;
             let mut prefetches: VecDeque<(
                 usize,
                 tokio::task::JoinHandle<anyhow::Result<Vec<u8>>>,
@@ -627,26 +628,30 @@ impl CacheService {
                         next_i,
                         tokio::spawn(async move {
                             let raw = be.get(&next_ft.sha256).await?;
-                            let (raw, actual) = tokio::task::spawn_blocking(move || {
-                                let h = chunker::sha256_hex(&raw);
-                                (raw, h)
-                            })
-                            .await
-                            .map_err(|e| anyhow::anyhow!("sha256 panicked: {}", e))?;
-                            if actual != next_ft.sha256 {
-                                tracing::error!(
-                                    "checksum mismatch for chunk {}: expected {} got {}",
-                                    next_ft.chunk_index,
-                                    next_ft.sha256,
-                                    actual
-                                );
-                                let _ = be.delete(&next_ft.sha256).await;
-                                anyhow::bail!(
-                                    "checksum mismatch for chunk {}",
-                                    next_ft.chunk_index
-                                );
+                            if verify_sha256 {
+                                let (raw2, actual) = tokio::task::spawn_blocking(move || {
+                                    let h = chunker::sha256_hex(&raw);
+                                    (raw, h)
+                                })
+                                .await
+                                .map_err(|e| anyhow::anyhow!("sha256 panicked: {}", e))?;
+                                if actual != next_ft.sha256 {
+                                    tracing::error!(
+                                        "checksum mismatch for chunk {}: expected {} got {}",
+                                        next_ft.chunk_index,
+                                        next_ft.sha256,
+                                        actual
+                                    );
+                                    let _ = be.delete(&next_ft.sha256).await;
+                                    anyhow::bail!(
+                                        "checksum mismatch for chunk {}",
+                                        next_ft.chunk_index
+                                    );
+                                }
+                                Ok(raw2)
+                            } else {
+                                Ok(raw)
                             }
-                            Ok(raw)
                         }),
                     ));
                 }

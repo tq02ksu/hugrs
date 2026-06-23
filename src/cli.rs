@@ -49,6 +49,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub max_size: Option<u64>,
 
+    #[arg(long, global = true, default_value_t = 0)]
+    pub prefetch_depth: usize,
+
+    #[arg(long, global = true)]
+    pub enable_sha256_verify: Option<bool>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -71,6 +77,8 @@ impl Cli {
             config_file: self.config.clone(),
             compression: self.compression.clone(),
             max_size: self.max_size,
+            prefetch_depth: Some(self.prefetch_depth),
+            enable_sha256_verify: self.enable_sha256_verify,
         }
     }
 }

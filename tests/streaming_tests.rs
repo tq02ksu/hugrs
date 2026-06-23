@@ -117,6 +117,8 @@ async fn test_multiple_gets_no_duplicate_downloads() {
         None,
         http_client,
         head_client,
+        0,
+        true,
     ));
 
     let upstream_url = format!("http://{}/test/repo/resolve/main/test.bin", addr);
@@ -218,6 +220,8 @@ async fn test_partial_cache_no_redundant_download() {
         None,
         http_client,
         head_client,
+        0,
+        true,
     );
 
     let upstream_url = format!("http://{}/test/repo/resolve/main/part.bin", addr);
