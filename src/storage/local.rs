@@ -47,31 +47,41 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn get(&self, sha256: &str) -> anyhow::Result<Vec<u8>> {
-        let compressed_path = self.compressed_path(sha256);
-        if tokio::fs::metadata(&compressed_path).await.is_ok() {
-            let compressed = tokio::fs::read(&compressed_path).await?;
-            Ok(zstd::decode_all(&compressed[..])?)
-        } else {
-            let path = self.trunk_path(sha256);
-            Ok(tokio::fs::read(&path).await?)
+        if self.compression != Compression::None {
+            let compressed_path = self.compressed_path(sha256);
+            if tokio::fs::metadata(&compressed_path).await.is_ok() {
+                let compressed = tokio::fs::read(&compressed_path).await?;
+                return Ok(zstd::decode_all(&compressed[..])?);
+            }
         }
+        let path = self.trunk_path(sha256);
+        Ok(tokio::fs::read(&path).await?)
     }
 
     async fn exists(&self, sha256: &str) -> anyhow::Result<bool> {
         let path = self.trunk_path(sha256);
-        let compressed_path = self.compressed_path(sha256);
-        Ok(tokio::fs::metadata(&path).await.is_ok()
-            || tokio::fs::metadata(&compressed_path).await.is_ok())
+        if tokio::fs::metadata(&path).await.is_ok() {
+            return Ok(true);
+        }
+        if self.compression != Compression::None {
+            let compressed_path = self.compressed_path(sha256);
+            if tokio::fs::metadata(&compressed_path).await.is_ok() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn delete(&self, sha256: &str) -> anyhow::Result<()> {
         let path = self.trunk_path(sha256);
-        let compressed_path = self.compressed_path(sha256);
         if tokio::fs::metadata(&path).await.is_ok() {
             tokio::fs::remove_file(&path).await?;
         }
-        if tokio::fs::metadata(&compressed_path).await.is_ok() {
-            tokio::fs::remove_file(&compressed_path).await?;
+        if self.compression != Compression::None {
+            let compressed_path = self.compressed_path(sha256);
+            if tokio::fs::metadata(&compressed_path).await.is_ok() {
+                tokio::fs::remove_file(&compressed_path).await?;
+            }
         }
         Ok(())
     }

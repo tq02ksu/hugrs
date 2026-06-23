@@ -2,7 +2,7 @@ use crate::chunker;
 use crate::metadata::{File, MetadataStore, Stats};
 use crate::storage::StorageBackend;
 use bytes::Bytes;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use tokio::sync::{mpsc, oneshot, Semaphore};
@@ -21,6 +21,8 @@ pub struct CacheService {
     head_client: reqwest::Client,
     download_locks: Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     download_sem: Arc<Semaphore>,
+    prefetch_depth: usize,
+    verify_sha256: bool,
 }
 
 struct DownloadedChunk {
@@ -37,7 +39,17 @@ impl CacheService {
         max_size: Option<u64>,
         http_client: reqwest::Client,
         head_client: reqwest::Client,
+        prefetch_depth: usize,
+        verify_sha256: bool,
     ) -> Self {
+        let depth = if prefetch_depth == 0 {
+            let cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
+            cpus.min(16).max(1)
+        } else {
+            prefetch_depth.min(16).max(1)
+        };
         Self {
             metadata,
             backend,
@@ -46,6 +58,8 @@ impl CacheService {
             head_client,
             download_locks: Arc::new(StdMutex::new(HashMap::new())),
             download_sem: Arc::new(Semaphore::new(128)),
+            prefetch_depth: depth,
+            verify_sha256,
         }
     }
 
@@ -536,35 +550,105 @@ impl CacheService {
         let backend = self.backend.clone();
         let relevant: Vec<_> = trunks[first_chunk..=last_chunk].to_vec();
 
-        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(8);
+        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
-            for ft in &relevant {
-                let data = match backend.get(&ft.sha256).await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
-                        return;
+            let prefetch_depth = self.prefetch_depth;
+            let verify_sha256 = self.verify_sha256;
+            let mut prefetches: VecDeque<(
+                usize,
+                tokio::task::JoinHandle<anyhow::Result<Vec<u8>>>,
+            )> = VecDeque::new();
+
+            for (i, ft) in relevant.iter().enumerate() {
+                let data = if let Some((_idx, h)) = prefetches.pop_front() {
+                    match h.await {
+                        Ok(Ok(d)) => d,
+                        Ok(Err(e)) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                        Err(_) => {
+                            let _ = tx
+                                .send(Err(anyhow::anyhow!(
+                                    "chunk {} pre-fetch panicked",
+                                    ft.chunk_index
+                                )))
+                                .await;
+                            return;
+                        }
+                    }
+                } else {
+                    let raw = match backend.get(&ft.sha256).await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                    };
+                    if verify_sha256 {
+                        let (raw2, actual) = tokio::task::spawn_blocking(move || {
+                            let h = chunker::sha256_hex(&raw);
+                            (raw, h)
+                        })
+                        .await
+                        .unwrap();
+                        if actual != ft.sha256 {
+                            tracing::error!(
+                                "checksum mismatch for chunk {}: expected {} got {}",
+                                ft.chunk_index,
+                                ft.sha256,
+                                actual
+                            );
+                            let _ = backend.delete(&ft.sha256).await;
+                            let _ = tx
+                                .send(Err(anyhow::anyhow!(
+                                    "checksum mismatch for chunk {}",
+                                    ft.chunk_index
+                                )))
+                                .await;
+                            return;
+                        }
+                        raw2
+                    } else {
+                        raw
                     }
                 };
 
-                let actual_hash = chunker::sha256_hex(&data);
-                if actual_hash != ft.sha256 {
-                    tracing::error!(
-                        "checksum mismatch for chunk {}: expected {} got {}",
-                        ft.chunk_index,
-                        ft.sha256,
-                        actual_hash
-                    );
-                    let _ = backend.delete(&ft.sha256).await;
-                    let _ = tx
-                        .send(Err(anyhow::anyhow!(
-                            "checksum mismatch for chunk {}",
-                            ft.chunk_index
-                        )))
-                        .await;
-                    return;
+                while prefetches.len() < prefetch_depth {
+                    let next_i = i + prefetches.len() + 1;
+                    if next_i >= relevant.len() {
+                        break;
+                    }
+                    let next_ft = relevant[next_i].clone();
+                    let be = backend.clone();
+                    prefetches.push_back((
+                        next_i,
+                        tokio::spawn(async move {
+                            let raw = be.get(&next_ft.sha256).await?;
+                            let (raw, actual) = tokio::task::spawn_blocking(move || {
+                                let h = chunker::sha256_hex(&raw);
+                                (raw, h)
+                            })
+                            .await
+                            .map_err(|e| anyhow::anyhow!("sha256 panicked: {}", e))?;
+                            if actual != next_ft.sha256 {
+                                tracing::error!(
+                                    "checksum mismatch for chunk {}: expected {} got {}",
+                                    next_ft.chunk_index,
+                                    next_ft.sha256,
+                                    actual
+                                );
+                                let _ = be.delete(&next_ft.sha256).await;
+                                anyhow::bail!(
+                                    "checksum mismatch for chunk {}",
+                                    next_ft.chunk_index
+                                );
+                            }
+                            Ok(raw)
+                        }),
+                    ));
                 }
 
                 let chunk_start = byte_offset;
@@ -581,12 +665,17 @@ impl CacheService {
                     data.len()
                 };
 
-                let bytes = Bytes::from(data[sl_start..sl_end].to_vec());
+                let data_len = data.len();
+                let bytes = if sl_start == 0 && sl_end == data_len {
+                    Bytes::from(data)
+                } else {
+                    Bytes::copy_from_slice(&data[sl_start..sl_end])
+                };
                 if tx.send(Ok(bytes)).await.is_err() {
                     return;
                 }
 
-                byte_offset += data.len() as u64;
+                byte_offset += data_len as u64;
             }
         });
 
@@ -827,9 +916,9 @@ impl CacheService {
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
             for i in first_chunk..=last_chunk {
-                let raw: Vec<u8> = if let Some(rx) = chunk_rxs.remove(&i) {
+                let raw: Bytes = if let Some(rx) = chunk_rxs.remove(&i) {
                     match rx.await {
-                        Ok(Ok(b)) => b.to_vec(),
+                        Ok(Ok(b)) => b,
                         Ok(Err(e)) => {
                             let _ = tx.send(Err(e)).await;
                             return;
@@ -843,7 +932,7 @@ impl CacheService {
                     }
                 } else if let Some(sha) = cached_sha.get(&i) {
                     match backend_s.get(sha).await {
-                        Ok(d) => d,
+                        Ok(d) => Bytes::from(d),
                         Err(e) => {
                             let _ = tx
                                 .send(Err(anyhow::anyhow!("cached chunk {} read error: {}", i, e)))
@@ -875,7 +964,7 @@ impl CacheService {
                     raw.len()
                 };
 
-                let bytes = Bytes::from(raw[sl_start..sl_end].to_vec());
+                let bytes = raw.slice(sl_start..sl_end);
                 if tx.send(Ok(bytes)).await.is_err() {
                     return;
                 }
