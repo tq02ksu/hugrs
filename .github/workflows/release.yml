@@ -6,7 +6,7 @@ on:
 
 jobs:
   binary:
-    runs-on: debian-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +24,7 @@ jobs:
           generate_release_notes: true
 
   docker:
-    runs-on: debian-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
