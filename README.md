@@ -12,6 +12,21 @@ Content-addressed caching service for HuggingFace model files. Files are split i
 - **HuggingFace Hub integration**: Pull models from huggingface.co or hf-mirror.com
 - **Proxy support**: HTTP proxy for corporate environments
 
+## Docker
+
+```bash
+# Run with default settings
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.1.0
+
+# Custom endpoint and persistent cache
+docker run -p 3000:3000 \
+  -v ./cache:/home/hugrs/.cache/hugrs \
+  ghcr.io/tq02ksu/hugrs:0.1.0 \
+  serve --hf-endpoint https://hf-mirror.com
+```
+
+Image runs as non-root `hugrs` user on Debian 13 (trixie-slim). Cache data goes to `~/.cache/hugrs/`.
+
 ## Quick Start
 
 ```bash

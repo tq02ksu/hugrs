@@ -12,6 +12,21 @@
 - **HuggingFace Hub 集成**：从 huggingface.co 或 hf-mirror.com 拉取模型
 - **透明缓存代理**：直接替换 HF_ENDPOINT，无需修改客户端代码
 
+## Docker
+
+```bash
+# 默认配置启动
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.1.0
+
+# 指定镜像站 + 持久化缓存
+docker run -p 3000:3000 \
+  -v ./cache:/home/hugrs/.cache/hugrs \
+  ghcr.io/tq02ksu/hugrs:0.1.0 \
+  serve --hf-endpoint https://hf-mirror.com
+```
+
+镜像以非 root 用户 `hugrs` 运行，基础镜像 Debian 13 (trixie-slim)。缓存数据默认落 `~/.cache/hugrs/`。
+
 ## 快速开始
 
 ```bash
