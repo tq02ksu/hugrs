@@ -2,6 +2,10 @@
 name = "hugrs"
 version = "0.1.0"
 edition = "2021"
+description = "A transparent caching proxy for HuggingFace model files with content-addressed 4MB chunk storage"
+license = "MIT"
+repository = "https://github.com/anomalyco/hugrs"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
