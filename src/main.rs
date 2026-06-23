@@ -96,16 +96,17 @@ fn main() -> anyhow::Result<()> {
 
             Command::Stats => {
                 let stats = service.stats().await?;
-                println!("Repos:       {}", stats.repo_count);
-                println!("Files:       {}", stats.file_count);
-                println!("Trunks:      {}", stats.trunk_count);
-                println!("Total size:  {} bytes", stats.total_size);
-                println!("Unique size: {} bytes", stats.unique_size);
+                println!("Repos:             {}", stats.repo_count);
+                println!("Files:             {}", stats.file_count);
+                println!("Trunks:            {}", stats.trunk_count);
+                println!("Total size:        {} bytes", stats.total_size);
+                println!("Unique size:       {} bytes", stats.unique_size);
+                println!("Compression ratio: {:.2}%", stats.compression_ratio * 100.0);
                 if let Some(limit) = config.storage.max_size {
                     let pct = (stats.total_size as u64 * 100)
                         .checked_div(limit)
                         .unwrap_or(0);
-                    println!("Max size:    {} bytes ({}% used)", limit, pct);
+                    println!("Max size:          {} bytes ({}% used)", limit, pct);
                 }
             }
 

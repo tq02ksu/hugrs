@@ -43,6 +43,7 @@ pub struct Stats {
     pub trunk_count: i64,
     pub total_size: i64,
     pub unique_size: i64,
+    pub compression_ratio: f64,
 }
 
 pub struct MetadataStore {
@@ -426,12 +427,18 @@ impl MetadataStore {
             [],
             |row| row.get(0),
         )?;
+        let compression_ratio = if total_size > 0 {
+            unique_size as f64 / total_size as f64
+        } else {
+            1.0
+        };
         Ok(Stats {
             repo_count,
             file_count,
             trunk_count,
             total_size,
             unique_size,
+            compression_ratio,
         })
     }
 
