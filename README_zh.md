@@ -14,13 +14,13 @@
 ## Docker
 
 ```bash
-docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.1.0
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.1.1
 
 # 指定镜像源 + 持久化缓存（使用命名卷）
 docker volume create hugrs-cache
 docker run -p 3000:3000 \
   -v hugrs-cache:/home/hugrs/.cache/hugrs \
-  ghcr.io/tq02ksu/hugrs:0.1.0 \
+  ghcr.io/tq02ksu/hugrs:0.1.1 \
   serve --hf-endpoint https://hf-mirror.com
 ```
 

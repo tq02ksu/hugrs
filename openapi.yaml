@@ -5,7 +5,7 @@ info:
     Single-service HuggingFace Hub mirror. All requests served from one
     domain, no CDN redirects. Derived from actual nginx access logs of
     `huggingface-cli download` (v1.16.1, hf_hub v1.16.1).
-  version: "0.1.0"
+  version: "0.1.1"
 
 servers:
   - url: http://127.0.0.1:3000
