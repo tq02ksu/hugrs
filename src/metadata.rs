@@ -369,7 +369,11 @@ impl MetadataStore {
         Ok(result)
     }
 
-    pub fn is_chunk_linked(&self, file_id: i64, chunk_index: usize) -> anyhow::Result<Option<String>> {
+    pub fn is_chunk_linked(
+        &self,
+        file_id: i64,
+        chunk_index: usize,
+    ) -> anyhow::Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
             "SELECT sha256 FROM file_trunks WHERE file_id = ?1 AND chunk_index = ?2",

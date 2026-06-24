@@ -917,7 +917,15 @@ impl CacheService {
                 let _file_permit = fsem.acquire().await;
                 let _permit = sem.acquire().await;
                 let result = Self::do_download_chunk(
-                    client, url, i, total_size, backend, metadata, file_id, fname, chunk_count,
+                    client,
+                    url,
+                    i,
+                    total_size,
+                    backend,
+                    metadata,
+                    file_id,
+                    fname,
+                    chunk_count,
                 )
                 .await;
                 let _ = chunk_tx.send(result);
