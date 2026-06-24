@@ -17,7 +17,6 @@ reqwest = { version = "0.13", default-features = false, features = ["stream", "r
 aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 anyhow = "1"
-thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 async-trait = "0.1"
@@ -25,9 +24,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
 futures-util = "0.3"
-tokio-util = { version = "0.7", features = ["codec"] }
 tokio-stream = "0.1"
-tempfile = "3"
+dashmap = "6"
 toml = "0.8"
 dotenvy = "0.15"
 dirs = "6"
@@ -36,3 +34,4 @@ zstd = "0.13"
 [dev-dependencies]
 tokio-test = "0.4"
 tower = "0.5"
+tempfile = "3"
