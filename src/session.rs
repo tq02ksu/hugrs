@@ -56,6 +56,15 @@ fn select_next_chunk(
         .next()
 }
 
+fn retain_active_prefetches(
+    inflight_prefetches: &mut HashSet<usize>,
+    completed: &HashSet<usize>,
+    cached: &HashSet<usize>,
+) -> usize {
+    inflight_prefetches.retain(|idx| !completed.contains(idx) && !cached.contains(idx));
+    inflight_prefetches.len()
+}
+
 // ── TrunkSession ──────────────────────────────────────────────
 
 pub struct TrunkSession {
@@ -240,6 +249,7 @@ pub struct FileDownloadSession {
 
     subscriber_count: AtomicUsize,
     subscribers: Subscribers,
+    inflight_prefetches: StdMutex<HashSet<usize>>,
 
     session_table: Arc<SessionTable>,
     metadata: Arc<MetadataStore>,
@@ -277,6 +287,7 @@ impl FileDownloadSession {
             chunk_count: chunk_count.max(1),
             subscriber_count: AtomicUsize::new(0),
             subscribers: StdMutex::new(Vec::new()),
+            inflight_prefetches: StdMutex::new(HashSet::new()),
             session_table,
             metadata,
             backend,
@@ -359,7 +370,6 @@ impl FileDownloadSession {
         let chunk_sz = CHUNK_SIZE as u64;
 
         let mut completed: HashSet<usize> = HashSet::new();
-
         loop {
             let client_ranges: Vec<(u64, u64)> = {
                 let subs = self.subscribers.lock().unwrap();
@@ -387,6 +397,7 @@ impl FileDownloadSession {
             if let Some(i) =
                 select_next_chunk(&client_ranges, &completed, chunk_sz, self.chunk_count)
             {
+                self.untrack_prefetch(i);
                 let start = (i * CHUNK_SIZE) as u64;
                 let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
 
@@ -412,32 +423,45 @@ impl FileDownloadSession {
                         self.served_bytes
                             .fetch_add(data.len() as u64, Ordering::Relaxed);
 
+                        completed.insert(i);
+                        let active_prefetches = self.finish_prefetches(&completed, &HashSet::new());
+
                         tracing::info!(
-                            "[f{}] {} trunk {}/{}: {} bytes in {}ms",
+                            "[f{}] {} trunk {}/{}: {} bytes in {}ms, prefetch_active={}",
                             self.file_id,
                             self.name,
                             i + 1,
                             self.chunk_count,
                             data.len(),
                             elapsed_ms,
+                            active_prefetches,
                         );
                         if elapsed_ms > 5_000 {
                             tracing::warn!(
-                                "[f{}] {} trunk {}/{}: SLOW — {} bytes in {}ms",
+                                "[f{}] {} trunk {}/{}: SLOW — {} bytes in {}ms, prefetch_active={}",
                                 self.file_id,
                                 self.name,
                                 i + 1,
                                 self.chunk_count,
                                 data.len(),
                                 elapsed_ms,
+                                active_prefetches,
                             );
                         }
 
                         let budget = prefetch_budget(active_cursors.len());
                         let per_cursor = (budget / active_cursors.len().max(1)).max(1);
+                        let mut cached_prefetches = HashSet::new();
                         for cursor in active_cursors {
                             for j in (cursor + 1)..(cursor + 1 + per_cursor).min(self.chunk_count) {
-                                if completed.contains(&j) || self.is_trunk_cached(j).await {
+                                if completed.contains(&j) {
+                                    continue;
+                                }
+                                if self.is_trunk_cached(j).await {
+                                    cached_prefetches.insert(j);
+                                    continue;
+                                }
+                                if !self.track_prefetch(j) {
                                     continue;
                                 }
                                 let pstart = (j * CHUNK_SIZE) as u64;
@@ -459,8 +483,7 @@ impl FileDownloadSession {
                                     .await;
                             }
                         }
-
-                        completed.insert(i);
+                        self.finish_prefetches(&completed, &cached_prefetches);
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         tracing::warn!("chunk {} download closed unexpectedly", i);
@@ -485,11 +508,14 @@ impl FileDownloadSession {
         self.subscribers.lock().unwrap().clear();
 
         tracing::info!(
-            "[f{}] {}: session finished in {}ms, all senders dropped",
+            "[f{}] {}: session finished in {}ms, prefetch_active={}, all senders dropped",
             self.file_id,
             self.name,
-            session_start.elapsed().as_millis()
+            session_start.elapsed().as_millis(),
+            self.prefetch_active(),
         );
+
+        self.task.lock().unwrap().take();
     }
 
     async fn ensure_file_metadata(&self) -> anyhow::Result<File> {
@@ -594,6 +620,23 @@ impl FileDownloadSession {
         }
     }
 
+    fn track_prefetch(&self, idx: usize) -> bool {
+        self.inflight_prefetches.lock().unwrap().insert(idx)
+    }
+
+    fn untrack_prefetch(&self, idx: usize) {
+        self.inflight_prefetches.lock().unwrap().remove(&idx);
+    }
+
+    fn finish_prefetches(&self, completed: &HashSet<usize>, cached: &HashSet<usize>) -> usize {
+        let mut inflight = self.inflight_prefetches.lock().unwrap();
+        retain_active_prefetches(&mut inflight, completed, cached)
+    }
+
+    fn prefetch_active(&self) -> usize {
+        self.inflight_prefetches.lock().unwrap().len()
+    }
+
     async fn forward_chunk(&self, chunk_start: u64, data: &[u8]) {
         let targets: Vec<(ClientRange, ClientSender)> = {
             let subs = self.subscribers.lock().unwrap();
@@ -693,8 +736,18 @@ impl FileSessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_active_cursors, prefetch_budget, select_next_chunk};
+    use super::{
+        compute_active_cursors, prefetch_budget, retain_active_prefetches, select_next_chunk,
+        FileDownloadSession,
+    };
+    use crate::metadata::MetadataStore;
+    use crate::storage::local::LocalBackend;
+    use crate::storage::Compression;
     use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+    use tempfile::TempDir;
+    use tokio::task::JoinHandle;
 
     #[test]
     fn single_subscriber_picks_smallest_incomplete_chunk() {
@@ -721,5 +774,98 @@ mod tests {
         assert_eq!(prefetch_budget(1), 16);
         assert_eq!(prefetch_budget(2), 8);
         assert_eq!(prefetch_budget(3), 4);
+    }
+
+    #[test]
+    fn retain_active_prefetches_drops_completed_and_cached_chunks() {
+        let mut inflight = HashSet::from([18usize, 19, 20, 21]);
+        let completed = HashSet::from([18usize]);
+        let cached = HashSet::from([20usize]);
+
+        let active = retain_active_prefetches(&mut inflight, &completed, &cached);
+
+        assert_eq!(active, 2);
+        assert_eq!(inflight, HashSet::from([19usize, 21]));
+    }
+
+    #[tokio::test]
+    async fn finished_session_clears_task_slot() {
+        let dir = TempDir::new().unwrap();
+        let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalBackend::new(
+            dir.path().join("trunks"),
+            Compression::None,
+        ));
+        let fetched_bytes = Arc::new(AtomicU64::new(0));
+        let served_bytes = Arc::new(AtomicU64::new(0));
+        let client = reqwest::Client::new();
+        let session_table = Arc::new(super::SessionTable::new(
+            client.clone(),
+            backend.clone(),
+            metadata.clone(),
+            fetched_bytes,
+        ));
+
+        let session = Arc::new(FileDownloadSession::new(
+            1,
+            "test.bin".to_string(),
+            "test/repo".to_string(),
+            "http://localhost/test.bin".to_string(),
+            crate::service::CHUNK_SIZE as u64,
+            1,
+            session_table,
+            metadata,
+            backend,
+            client,
+            served_bytes,
+        ));
+
+        *session.task.lock().unwrap() = Some(tokio::spawn(async {}) as JoinHandle<()>);
+
+        session.clone().run_download_loop().await;
+
+        assert!(session.task.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn file_session_tracks_prefetch_state() {
+        let dir = TempDir::new().unwrap();
+        let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalBackend::new(
+            dir.path().join("trunks"),
+            Compression::None,
+        ));
+        let fetched_bytes = Arc::new(AtomicU64::new(0));
+        let served_bytes = Arc::new(AtomicU64::new(0));
+        let client = reqwest::Client::new();
+        let session_table = Arc::new(super::SessionTable::new(
+            client.clone(),
+            backend.clone(),
+            metadata.clone(),
+            fetched_bytes,
+        ));
+
+        let session = FileDownloadSession::new(
+            1,
+            "test.bin".to_string(),
+            "test/repo".to_string(),
+            "http://localhost/test.bin".to_string(),
+            crate::service::CHUNK_SIZE as u64,
+            8,
+            session_table,
+            metadata,
+            backend,
+            client,
+            served_bytes,
+        );
+
+        session.track_prefetch(18);
+        session.track_prefetch(19);
+        session.track_prefetch(20);
+
+        let active = session.finish_prefetches(&HashSet::from([18usize]), &HashSet::from([20usize]));
+
+        assert_eq!(active, 1);
+        assert_eq!(session.prefetch_active(), 1);
     }
 }

@@ -2,13 +2,14 @@ use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
     response::Response,
-    routing::head,
+    routing::{get, head},
     Router,
 };
 use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
 use hugrs::storage::local::LocalBackend;
 use hugrs::storage::Compression;
+use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -65,6 +66,21 @@ async fn mock_get(
         .unwrap())
 }
 
+async fn mock_model_api_proxy(req: axum::extract::Request) -> Response {
+    let uri = req.uri();
+    let body = serde_json::to_vec(&json!({
+        "path": uri.path(),
+        "query": uri.query().unwrap_or(""),
+    }))
+    .unwrap();
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap()
+}
+
 async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
     let state = MockState {
         data: Arc::new(data),
@@ -75,6 +91,7 @@ async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
             "/{org}/{repo}/resolve/{revision}/{*path}",
             head(mock_head).get(mock_get),
         )
+        .route("/api/models/{org}/{repo}/{*path}", get(mock_model_api_proxy))
         .with_state(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", l.local_addr().unwrap());
@@ -159,6 +176,10 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
     };
 
     Router::new()
+        .route(
+            "/api/models/{org}/{repo}/{*suffix}",
+            get(hugrs::server::handle_api_proxy_suffix),
+        )
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
             get(hugrs::server::handle_file_proxy).head(hugrs::server::handle_file_proxy),
@@ -277,4 +298,32 @@ async fn test_second_get_uses_cache_and_matches() {
     }
     assert_eq!(got, test_data);
     assert_eq!(first, s.get_count.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn test_generic_model_api_proxy_forwards_suffix_and_query() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/api/models/Qwen/Qwen3-Reranker-8B/tree/main?recursive=true&expand=false")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(
+        body["path"],
+        json!("/api/models/Qwen/Qwen3-Reranker-8B/tree/main")
+    );
+    assert_eq!(body["query"], json!("recursive=true&expand=false"));
 }

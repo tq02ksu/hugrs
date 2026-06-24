@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::hf;
 use crate::service::CacheService;
 use axum::{
-    extract::{Path, Request, State},
+    extract::{OriginalUri, Path, Request, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -38,6 +38,10 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
         .route(
             "/api/models/{org}/{repo}/revision/{revision}",
             get(handle_api_proxy).head(handle_api_proxy),
+        )
+        .route(
+            "/api/models/{org}/{repo}/{*suffix}",
+            get(handle_api_proxy_suffix),
         )
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
@@ -119,6 +123,14 @@ async fn handle_api_proxy(
     proxy_model_info(state, org, repo, revision).await
 }
 
+pub async fn handle_api_proxy_suffix(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    Path((org, repo, suffix)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    proxy_model_api_path(state, org, repo, &suffix, uri.query()).await
+}
+
 async fn proxy_model_info(
     state: AppState,
     org: String,
@@ -189,6 +201,26 @@ async fn proxy_model_info(
     builder
         .body(body.into())
         .map_err(|e| AppError::Anyhow(e.into()))
+}
+
+async fn proxy_model_api_path(
+    state: AppState,
+    org: String,
+    repo: String,
+    suffix: &str,
+    query: Option<&str>,
+) -> Result<Response, AppError> {
+    let repo_id = format!("{}/{}", org, repo);
+    let mut url = format!(
+        "{}/api/models/{}/{}",
+        state.config.huggingface.endpoint, repo_id, suffix
+    );
+    if let Some(query) = query {
+        url.push('?');
+        url.push_str(query);
+    }
+
+    proxy_json(&state, &url).await
 }
 
 pub async fn handle_file_proxy(

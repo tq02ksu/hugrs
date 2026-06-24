@@ -285,3 +285,92 @@ async fn test_partial_cache_no_redundant_download() {
         "should only download 2 missing chunks (not the precached one)"
     );
 }
+
+#[tokio::test]
+async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
+    let total = CHUNK_SIZE * 2 + 1000;
+    let test_data: Vec<u8> = (0..total)
+        .map(|i| (i as u8).wrapping_mul(11).wrapping_add(5))
+        .collect();
+    let state = MockState {
+        get_count: Arc::new(AtomicU32::new(0)),
+        head_count: Arc::new(AtomicU32::new(0)),
+        test_data: Arc::new(test_data.clone()),
+    };
+
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head(mock_head).get(mock_get),
+        )
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("trunks"),
+        Compression::None,
+    ));
+
+    let head_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let http_client = reqwest::Client::new();
+
+    let service = Arc::new(CacheService::new(
+        metadata,
+        backend,
+        None,
+        http_client,
+        head_client,
+        0,
+        true,
+        reqwest::Client::new(),
+    ));
+
+    let upstream_url = format!("http://{}/test/repo/resolve/main/test.bin", addr);
+
+    use futures_util::StreamExt;
+
+    let (_, _, stream1) = service
+        .stream_from_upstream(&upstream_url, "test.bin", "test/repo", None, None)
+        .await
+        .unwrap();
+    let mut stream1 = stream1;
+    let first_chunk = tokio::time::timeout(std::time::Duration::from_secs(1), stream1.next())
+        .await
+        .expect("first chunk should arrive")
+        .expect("stream should yield first chunk")
+        .expect("first chunk should be ok");
+    assert_eq!(first_chunk.len(), CHUNK_SIZE);
+    drop(stream1);
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let (_, content_length2, stream2) = service
+        .stream_from_upstream(&upstream_url, "test.bin", "test/repo", None, None)
+        .await
+        .unwrap();
+    assert_eq!(content_length2 as usize, test_data.len());
+
+    let collected = tokio::time::timeout(std::time::Duration::from_secs(2), async move {
+        let mut stream2 = stream2;
+        let mut collected = Vec::new();
+        while let Some(result) = stream2.next().await {
+            collected.extend_from_slice(&result.unwrap());
+        }
+        collected
+    })
+    .await
+    .expect("second subscriber should not hang after retry");
+
+    assert_eq!(collected, test_data);
+}
