@@ -1,62 +1,42 @@
 # HugRS
 
-Content-addressed caching service for HuggingFace model files. Files are split into 4MB trunks, each keyed by SHA256. Deduplicates identical chunks across files.
+High-performance HuggingFace model mirror. Prefetch-driven, content-addressed architecture with SHA256 integrity verification on read, chunk-level dedup & compression — purpose-built for LLM supply chain security and fast model delivery.
 
-## Features
+## Highlights
 
-- **Content-addressed storage**: 4MB fixed-size chunks, SHA256 keys, automatic deduplication
-- **SQLite metadata**: Tracks files, trunks, and their mappings
-- **Pluggable backends**: Local filesystem and S3-compatible storage
-- **CLI management**: Upload, pull, list, stats, garbage collection
-- **HTTP API**: RESTful access for upload/download/query
-- **HuggingFace Hub integration**: Pull models from huggingface.co or hf-mirror.com
-- **Proxy support**: HTTP proxy for corporate environments
+- **Supply Chain Security** — SHA256 content-addressed, verify-on-read integrity
+- **Storage Efficiency** — 4MB chunk dedup + compression, cross-file reuse
+- **Fast Access** — prefetch-driven caching, local hits after first pull
+- **Backup-Grade Integrity** — SQLite WAL transactions + resumable downloads, zero loss
+- **Transparent Proxy** — full upstream header forwarding, HF Hub protocol compatible
+- **Flexible Deployment** — single binary + Docker, local FS / S3 dual backend
 
 ## Docker
 
 ```bash
-# Run with default settings
 docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.1.0
 
-# Custom endpoint and persistent cache
+# custom endpoint + persistent cache (named volume)
+docker volume create hugrs-cache
 docker run -p 3000:3000 \
-  -v ./cache:/home/hugrs/.cache/hugrs \
+  -v hugrs-cache:/home/hugrs/.cache/hugrs \
   ghcr.io/tq02ksu/hugrs:0.1.0 \
   serve --hf-endpoint https://hf-mirror.com
 ```
 
-Image runs as non-root `hugrs` user on Debian 13 (trixie-slim). Cache data goes to `~/.cache/hugrs/`.
+Runs as non-root `hugrs` on Debian 13 (trixie-slim).
 
 ## Quick Start
 
 ```bash
-# Build
 cargo build --release
-
-# Start HTTP server
 cargo run -- serve
-
-# Start HTTP server with custom endpoint
 cargo run -- serve --hf-endpoint https://hf-mirror.com
-
-# Pull from HuggingFace
 cargo run -- pull bert-base-uncased
-
-# List cached files
 cargo run -- list
-
-# Show stats
 cargo run -- stats
-
-# Garbage collect orphaned trunks
 cargo run -- gc
 ```
-
-## Configuration
-
-[📖 Full Configuration Docs →](docs/CONFIG.md)
-
-Config priority (highest to lowest): CLI flags > env vars > `.env` file > `hugrs.toml` > defaults
 
 ## HTTP API
 
@@ -65,17 +45,23 @@ Config priority (highest to lowest): CLI flags > env vars > `.env` file > `hugrs
 | POST | `/files` | Upload file (multipart) |
 | GET | `/files/:name` | Download assembled file |
 | GET | `/files/:name/info` | File metadata |
-| POST | `/files/pull` | Pull from HF Hub (`{"repo":"..."}`) |
+| POST | `/files/pull` | Pull from HF Hub |
 | DELETE | `/files/:name` | Delete file |
 | GET | `/stats` | Cache statistics |
 
 ## Storage Layout
 
-Local backend stores trunks under:
+4MB trunks, SHA256-addressed:
+
 ```
 .cache/hugrs/trunks/{sha256[0..2]}/{sha256[2..4]}/{sha256}
 ```
-Default at `~/.cache/hugrs/`.
+
+## Configuration
+
+Priority: CLI flags > env vars > `.env` > `hugrs.toml` > defaults
+
+[📖 Full Configuration Docs →](docs/CONFIG.md)
 
 ## License
 
