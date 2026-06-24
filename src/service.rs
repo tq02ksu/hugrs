@@ -898,7 +898,7 @@ impl CacheService {
         let mut chunk_rxs: HashMap<usize, oneshot::Receiver<Result<Bytes, anyhow::Error>>> =
             HashMap::new();
 
-        let prefetch_count = 4usize;
+        let prefetch_count = self.prefetch_depth;
         let missing_set: Arc<HashSet<usize>> = Arc::new(missing.iter().copied().collect());
 
         for &i in missing.iter().take(prefetch_count) {
