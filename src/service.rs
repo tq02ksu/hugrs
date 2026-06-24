@@ -2,28 +2,15 @@ use crate::chunker;
 use crate::metadata::{File, MetadataStore, Stats};
 use crate::storage::StorageBackend;
 use bytes::Bytes;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use tokio::sync::{mpsc, oneshot, Semaphore};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 pub const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 pub type ByteStream = ReceiverStream<Result<Bytes, anyhow::Error>>;
-
-#[derive(Clone)]
-pub struct CacheService {
-    metadata: Arc<MetadataStore>,
-    backend: Arc<dyn StorageBackend>,
-    max_size: Option<u64>,
-    http_client: reqwest::Client,
-    head_client: reqwest::Client,
-    download_locks: Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-    download_sem: Arc<Semaphore>,
-    prefetch_depth: usize,
-    verify_sha256: bool,
-}
 
 struct DownloadedChunk {
     index: usize,
@@ -32,7 +19,22 @@ struct DownloadedChunk {
     data: Vec<u8>,
 }
 
+#[derive(Clone)]
+pub struct CacheService {
+    pub metadata: Arc<MetadataStore>,
+    pub backend: Arc<dyn StorageBackend>,
+    max_size: Option<u64>,
+    pub http_client: reqwest::Client,
+    pub head_client: reqwest::Client,
+    prefetch_depth: usize,
+    verify_sha256: bool,
+    fetched_bytes: Arc<AtomicU64>,
+    served_bytes: Arc<AtomicU64>,
+    fs_manager: Arc<crate::session::FileSessionManager>,
+}
+
 impl CacheService {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         metadata: Arc<MetadataStore>,
         backend: Arc<dyn StorageBackend>,
@@ -41,25 +43,37 @@ impl CacheService {
         head_client: reqwest::Client,
         prefetch_depth: usize,
         verify_sha256: bool,
+        stream_client: reqwest::Client,
     ) -> Self {
-        let depth = if prefetch_depth == 0 {
-            let cpus = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4);
-            cpus.clamp(1, 16)
-        } else {
-            prefetch_depth.clamp(1, 16)
-        };
+        let fetched_bytes = Arc::new(AtomicU64::new(0));
+        let served_bytes = Arc::new(AtomicU64::new(0));
+
+        let session_table = Arc::new(crate::session::SessionTable::new(
+            stream_client,
+            backend.clone(),
+            metadata.clone(),
+            fetched_bytes.clone(),
+        ));
+
+        let fs_manager = Arc::new(crate::session::FileSessionManager::new(
+            session_table.clone(),
+            metadata.clone(),
+            backend.clone(),
+            head_client.clone(),
+            served_bytes.clone(),
+        ));
+
         Self {
             metadata,
             backend,
             max_size,
             http_client,
             head_client,
-            download_locks: Arc::new(StdMutex::new(HashMap::new())),
-            download_sem: Arc::new(Semaphore::new(128)),
-            prefetch_depth: depth,
+            prefetch_depth,
             verify_sha256,
+            fetched_bytes,
+            served_bytes,
+            fs_manager,
         }
     }
 
@@ -115,19 +129,6 @@ impl CacheService {
         if self.is_file_complete(name).await? {
             tracing::info!("{} already cached, skipping", name);
             self.metadata.touch_repo(repo)?;
-            return Ok(());
-        }
-
-        let file_lock = {
-            let mut locks = self.download_locks.lock().unwrap();
-            locks
-                .entry(name.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let _guard = file_lock.lock().await;
-
-        if self.is_file_complete(name).await? {
             return Ok(());
         }
 
@@ -201,6 +202,8 @@ impl CacheService {
                 .await?
                 .bytes()
                 .await?;
+            self.fetched_bytes
+                .fetch_add(data.len() as u64, Ordering::Relaxed);
             self.metadata.delete_file(name)?;
             self.upload(name, repo, data.to_vec()).await?;
             self.metadata.set_file_headers(
@@ -271,10 +274,11 @@ impl CacheService {
             let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
             let downstream_url = downstream_url.clone();
             let client = self.http_client.clone();
-            let sem = self.download_sem.clone();
+            let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
+            let fetched_bytes = self.fetched_bytes.clone();
 
             handles.push(tokio::spawn(async move {
-                let _permit = sem.acquire().await;
+                let _permit = concurrency_sem.acquire().await;
                 let range_header = format!("bytes={}-{}", start, end);
                 let resp = client
                     .get(&downstream_url)
@@ -283,6 +287,7 @@ impl CacheService {
                     .await?;
 
                 let data = resp.bytes().await?;
+                fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
                 let sha256 = chunker::sha256_hex(&data);
 
                 anyhow::Ok(DownloadedChunk {
@@ -449,7 +454,10 @@ impl CacheService {
     }
 
     pub async fn stats(&self) -> anyhow::Result<Stats> {
-        self.metadata.get_stats()
+        let mut stats = self.metadata.get_stats()?;
+        stats.fetched_bytes = self.fetched_bytes.load(Ordering::Relaxed);
+        stats.served_bytes = self.served_bytes.load(Ordering::Relaxed);
+        Ok(stats)
     }
 
     pub async fn gc(&self) -> anyhow::Result<usize> {
@@ -555,6 +563,7 @@ impl CacheService {
         let prefetch_depth = self.prefetch_depth;
         let verify_sha256 = self.verify_sha256;
         let fname = name.to_string();
+        let served_bytes = self.served_bytes.clone();
 
         tokio::spawn(async move {
             let mut byte_offset = first_chunk as u64 * chunk_size_u64;
@@ -694,6 +703,7 @@ impl CacheService {
                 } else {
                     Bytes::copy_from_slice(&data[sl_start..sl_end])
                 };
+                served_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 if tx.send(Ok(bytes)).await.is_err() {
                     return;
                 }
@@ -713,21 +723,39 @@ impl CacheService {
         range_start: Option<u64>,
         range_end: Option<u64>,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
-        let file_lock = {
-            let mut locks = self.download_locks.lock().unwrap();
-            locks
-                .entry(name.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone()
-        };
-        let _guard = file_lock.lock().await;
+        self.fetch_file_metadata(url, name, repo).await?;
 
-        let existing = self.metadata.get_file_by_name(name)?;
-        let (total_size_db, _file_id_db) = existing
-            .as_ref()
-            .map(|f| (f.total_size as u64, f.id))
-            .unwrap_or((0, 0));
+        let file = self
+            .metadata
+            .get_file_by_name(name)?
+            .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?;
+        let total_size = file.total_size as u64;
 
+        if total_size <= CHUNK_SIZE as u64 {
+            return self.stream_small_file(url, name, &file).await;
+        }
+
+        let session = self
+            .fs_manager
+            .get_or_create(file.id, name, repo, url, total_size);
+        session
+            .subscribe(Some((range_start.unwrap_or(0), range_end)))
+            .await
+    }
+
+    async fn fetch_file_metadata(
+        &self,
+        url: &str,
+        name: &str,
+        repo: &str,
+    ) -> anyhow::Result<(
+        u64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+    )> {
         let head_resp = self.head_client.head(url).send().await?;
         let first_headers = head_resp.headers();
         let status = head_resp.status();
@@ -751,15 +779,15 @@ impl CacheService {
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
             let location = crate::server::resolve_redirect(url, location);
-            tracing::info!("stream_from_upstream following redirect: {}", location);
-            match self.http_client.head(location).send().await {
+            tracing::info!("fetch_file_metadata following redirect: {}", location);
+            match self.http_client.head(&location).send().await {
                 Ok(resp2) => {
                     let h = resp2.headers();
                     let cl: u64 = h
                         .get("content-length")
                         .and_then(|v| v.to_str().ok())
                         .and_then(|v| v.parse().ok())
-                        .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+                        .unwrap_or(0);
                     let et = h
                         .get("etag")
                         .and_then(|v| v.to_str().ok())
@@ -770,16 +798,14 @@ impl CacheService {
                         .map(|s| s.to_string());
                     (cl, et, ct)
                 }
-                Err(e) => {
-                    anyhow::bail!("redirect follow failed for {}: {}", url, e);
-                }
+                Err(e) => anyhow::bail!("redirect follow failed for {}: {}", url, e),
             }
         } else {
             let cl: u64 = first_headers
                 .get("content-length")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+                .unwrap_or(0);
             let et = first_headers
                 .get("etag")
                 .and_then(|v| v.to_str().ok())
@@ -791,280 +817,44 @@ impl CacheService {
             (cl, et, ct)
         };
 
-        if existing.is_some() && total_size_db != upstream_size {
+        let size = if upstream_size > 0 {
+            upstream_size
+        } else {
+            x_linked_size.unwrap_or(0) as u64
+        };
+        if size == 0 {
+            anyhow::bail!("cannot determine file size for {}", url);
+        }
+
+        let existing = self.metadata.get_file_by_name(name)?;
+        if existing
+            .as_ref()
+            .map(|f| f.total_size as u64 != size)
+            .unwrap_or(true)
+        {
             self.metadata.delete_file(name)?;
         }
-
-        let file = match self.metadata.get_file_by_name(name)? {
-            Some(f) => f,
-            None => {
-                self.metadata.delete_file(name)?;
-                self.metadata
-                    .add_file(name, repo, upstream_size as i64, "pull")?;
-                self.metadata.set_file_headers(
-                    name,
-                    etag.as_deref(),
-                    x_repo_commit.as_deref(),
-                    x_linked_size,
-                    x_linked_etag.as_deref(),
-                    content_type.as_deref(),
-                )?;
-                self.metadata
-                    .get_file_by_name(name)?
-                    .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?
-            }
-        };
-
-        let total_size = file.total_size as u64;
-        let file_id = file.id;
-
-        if upstream_size != total_size {
-            anyhow::bail!(
-                "upstream size {} != db size {} for {}",
-                upstream_size,
-                total_size,
-                name
-            );
+        if self.metadata.get_file_by_name(name)?.is_none() {
+            self.metadata.add_file(name, repo, size as i64, "pull")?;
         }
-
-        let req_start = range_start.unwrap_or(0);
-        let req_end = range_end
-            .unwrap_or(total_size.saturating_sub(1))
-            .min(total_size.saturating_sub(1));
-        if req_start > req_end || req_start >= total_size {
-            anyhow::bail!(
-                "invalid range: bytes={}-{}/{}",
-                req_start,
-                req_end,
-                total_size
-            );
-        }
-        let content_length = req_end - req_start + 1;
-
-        if total_size <= CHUNK_SIZE as u64 {
-            return self.stream_small_file(url, name, &file, total_size).await;
-        }
-
-        let chunk_count = (total_size as usize).div_ceil(CHUNK_SIZE);
-        let chunk_size_u64 = CHUNK_SIZE as u64;
-        let first_chunk = (req_start / chunk_size_u64) as usize;
-        let last_chunk = ((req_end / chunk_size_u64) as usize).min(chunk_count.saturating_sub(1));
-
-        let trunks = self
-            .metadata
-            .get_file_trunks(file_id)?
-            .into_iter()
-            .map(|ft| (ft.chunk_index as usize, ft.sha256))
-            .collect::<HashMap<usize, String>>();
-
-        let mut cached: HashSet<usize> = HashSet::new();
-        let mut cached_sha: HashMap<usize, String> = HashMap::new();
-        for (&idx, sha) in &trunks {
-            if idx >= first_chunk
-                && idx <= last_chunk
-                && self.backend.exists(sha).await.unwrap_or(false)
-            {
-                cached.insert(idx);
-                cached_sha.insert(idx, sha.clone());
-            }
-        }
-
-        let missing: Vec<usize> = (first_chunk..=last_chunk)
-            .filter(|i| !cached.contains(i))
-            .collect();
-
-        tracing::info!(
-            "[s{}] {}: chunks {}-{}/{} ({} cached, {} to download)",
-            file_id,
+        self.metadata.set_file_headers(
             name,
-            first_chunk,
-            last_chunk,
-            chunk_count,
-            cached.len(),
-            missing.len()
-        );
+            etag.as_deref(),
+            x_repo_commit.as_deref(),
+            x_linked_size,
+            x_linked_etag.as_deref(),
+            content_type.as_deref(),
+        )?;
+        self.metadata.touch_repo(repo)?;
 
-        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(16);
-
-        let backend = self.backend.clone();
-        let metadata = self.metadata.clone();
-        let client = self.http_client.clone();
-        let url = url.to_string();
-        let global_sem = self.download_sem.clone();
-        let file_sem = Arc::new(Semaphore::new(16));
-        let fname = name.to_string();
-        let frepo = repo.to_string();
-
-        let mut chunk_rxs: HashMap<usize, oneshot::Receiver<Result<Bytes, anyhow::Error>>> =
-            HashMap::new();
-
-        let prefetch_count = self.prefetch_depth;
-        let missing_set: Arc<HashSet<usize>> = Arc::new(missing.iter().copied().collect());
-
-        for &i in missing.iter().take(prefetch_count) {
-            let (chunk_tx, chunk_rx) = oneshot::channel();
-            chunk_rxs.insert(i, chunk_rx);
-
-            let client = client.clone();
-            let backend = backend.clone();
-            let metadata = metadata.clone();
-            let url = url.clone();
-            let sem = global_sem.clone();
-            let fsem = file_sem.clone();
-            let fname = fname.clone();
-
-            tokio::spawn(async move {
-                let _file_permit = fsem.acquire().await;
-                let _permit = sem.acquire().await;
-                let result = Self::do_download_chunk(
-                    client,
-                    url,
-                    i,
-                    total_size,
-                    backend,
-                    metadata,
-                    file_id,
-                    fname,
-                    chunk_count,
-                )
-                .await;
-                let _ = chunk_tx.send(result);
-            });
-        }
-
-        let missing_set_s = missing_set.clone();
-        let client_s = client.clone();
-        let backend_s = backend.clone();
-        let metadata_s = metadata.clone();
-        let url_s = url.clone();
-        let sem_s = global_sem.clone();
-        let fsem_s = file_sem.clone();
-        let fname_s = fname.clone();
-        let fid = file_id;
-
-        tokio::spawn(async move {
-            let mut byte_offset = first_chunk as u64 * chunk_size_u64;
-            for i in first_chunk..=last_chunk {
-                let raw: Bytes = if let Some(rx) = chunk_rxs.remove(&i) {
-                    match rx.await {
-                        Ok(Ok(b)) => b,
-                        Ok(Err(e)) => {
-                            tracing::warn!(
-                                "[f{}] {}: streaming aborted, chunk {} download failed: {}",
-                                fid,
-                                fname_s,
-                                i,
-                                e
-                            );
-                            let _ = tx.send(Err(e)).await;
-                            return;
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                "[f{}] {}: streaming aborted, chunk {} task panicked",
-                                fid,
-                                fname_s,
-                                i
-                            );
-                            let _ = tx
-                                .send(Err(anyhow::anyhow!("chunk {} task panicked", i)))
-                                .await;
-                            return;
-                        }
-                    }
-                } else if let Some(sha) = cached_sha.get(&i) {
-                    match backend_s.get(sha).await {
-                        Ok(d) => Bytes::from(d),
-                        Err(e) => {
-                            tracing::warn!(
-                                "[f{}] {}: cached stream aborted, chunk {} read error: {}",
-                                fid,
-                                fname_s,
-                                i,
-                                e
-                            );
-                            let _ = tx
-                                .send(Err(anyhow::anyhow!("cached chunk {} read error: {}", i, e)))
-                                .await;
-                            return;
-                        }
-                    }
-                } else {
-                    tracing::warn!(
-                        "[f{}] {}: streaming aborted, chunk {} missing (neither cached nor downloading)",
-                        fid,
-                        fname_s,
-                        i
-                    );
-                    let _ = tx
-                        .send(Err(anyhow::anyhow!(
-                            "chunk {} not cached and not downloading",
-                            i
-                        )))
-                        .await;
-                    return;
-                };
-
-                let chunk_start = byte_offset;
-                let chunk_end = byte_offset + raw.len() as u64 - 1;
-
-                let sl_start = if req_start > chunk_start {
-                    (req_start - chunk_start) as usize
-                } else {
-                    0
-                };
-                let sl_end = if req_end < chunk_end {
-                    (req_end - chunk_start + 1) as usize
-                } else {
-                    raw.len()
-                };
-
-                let bytes = raw.slice(sl_start..sl_end);
-                if tx.send(Ok(bytes)).await.is_err() {
-                    return;
-                }
-
-                byte_offset += raw.len() as u64;
-
-                let next = i + prefetch_count;
-                if missing_set_s.contains(&next)
-                    && !chunk_rxs.contains_key(&next)
-                    && !cached_sha.contains_key(&next)
-                {
-                    let (chunk_tx, chunk_rx) = oneshot::channel();
-                    chunk_rxs.insert(next, chunk_rx);
-
-                    let client = client_s.clone();
-                    let backend = backend_s.clone();
-                    let metadata = metadata_s.clone();
-                    let url = url_s.clone();
-                    let sem = sem_s.clone();
-                    let fsem = fsem_s.clone();
-                    let fname = fname_s.clone();
-
-                    tokio::spawn(async move {
-                        let _file_permit = fsem.acquire().await;
-                        let _permit = sem.acquire().await;
-                        let result = Self::do_download_chunk(
-                            client,
-                            url,
-                            next,
-                            total_size,
-                            backend,
-                            metadata,
-                            file_id,
-                            fname,
-                            chunk_count,
-                        )
-                        .await;
-                        let _ = chunk_tx.send(result);
-                    });
-                }
-            }
-            let _ = metadata_s.touch_repo(&frepo);
-        });
-
-        Ok((file, content_length, ReceiverStream::new(rx)))
+        Ok((
+            size,
+            etag,
+            content_type,
+            x_repo_commit,
+            x_linked_size,
+            x_linked_etag,
+        ))
     }
 
     async fn stream_small_file(
@@ -1072,110 +862,45 @@ impl CacheService {
         url: &str,
         name: &str,
         file: &File,
-        total_size: u64,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
         if self.is_file_complete(name).await? {
             return self.stream_cached_file(name, None, None).await;
         }
 
-        let repo = file.repo.clone();
+        let total_size = file.total_size as u64;
         let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
         let client = self.http_client.clone();
         let url = url.to_string();
         let svc = self.clone();
         let fname = name.to_string();
-        let frepo = repo.clone();
+        let frepo = file.repo.clone();
+        let fetched_bytes = self.fetched_bytes.clone();
+        let served_bytes = self.served_bytes.clone();
 
         tokio::spawn(async move {
-            let data = match client.get(&url).send().await {
-                Ok(resp) => match resp.bytes().await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let _ = tx.send(Err(anyhow::anyhow!("download error: {}", e))).await;
-                        return;
-                    }
-                },
+            let resp = match client.get(&url).send().await {
+                Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(Err(anyhow::anyhow!("request error: {}", e))).await;
                     return;
                 }
             };
-
+            let data = match resp.bytes().await {
+                Ok(d) => d,
+                Err(e) => {
+                    let _ = tx.send(Err(anyhow::anyhow!("download error: {}", e))).await;
+                    return;
+                }
+            };
+            fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
             if let Err(e) = svc.upload(&fname, &frepo, data.to_vec()).await {
                 let _ = tx.send(Err(e)).await;
                 return;
             }
+            served_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
             let _ = tx.send(Ok(data)).await;
         });
 
         Ok((file.clone(), total_size, ReceiverStream::new(rx)))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn do_download_chunk(
-        client: reqwest::Client,
-        url: String,
-        i: usize,
-        total_size: u64,
-        backend: Arc<dyn crate::storage::StorageBackend>,
-        metadata: Arc<MetadataStore>,
-        file_id: i64,
-        fname: String,
-        chunk_count: usize,
-    ) -> Result<Bytes, anyhow::Error> {
-        if let Some(sha) = metadata.is_chunk_linked(file_id, i)? {
-            let data = backend.get(&sha).await?;
-            tracing::info!(
-                "[f{}] {} chunk {}/{} already cached, skipping download",
-                file_id,
-                fname,
-                i + 1,
-                chunk_count
-            );
-            return Ok(Bytes::from(data));
-        }
-
-        let start = (i * CHUNK_SIZE) as u64;
-        let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
-        let range_header = format!("bytes={}-{}", start, end);
-
-        let data = client
-            .get(&url)
-            .header("Range", &range_header)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("chunk {} request error: {}", i, e))?
-            .bytes()
-            .await
-            .map_err(|e| anyhow::anyhow!("chunk {} download error: {}", i, e))?;
-
-        let (sha256, data) = tokio::task::spawn_blocking(move || {
-            let h = chunker::sha256_hex(&data);
-            (h, data)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("chunk {} sha256 panicked: {}", i, e))?;
-
-        let stored_size: i64 = if !backend.exists(&sha256).await.unwrap_or(false) {
-            backend.put(&sha256, &data).await? as i64
-        } else {
-            data.len() as i64
-        };
-
-        let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
-        metadata.ensure_trunk(&sha256, "local", &path, data.len() as i64, stored_size)?;
-
-        metadata.link_file_trunk(file_id, &sha256, i as i64, data.len() as i64)?;
-
-        tracing::info!(
-            "[f{}] {} chunk {}/{} done ({} bytes)",
-            file_id,
-            fname,
-            i + 1,
-            chunk_count,
-            data.len()
-        );
-
-        Ok(data)
     }
 }

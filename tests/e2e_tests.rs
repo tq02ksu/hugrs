@@ -96,7 +96,16 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
-    CacheService::new(metadata, backend, None, http, head, 0, true)
+    CacheService::new(
+        metadata,
+        backend,
+        None,
+        http,
+        head,
+        0,
+        true,
+        reqwest::Client::new(),
+    )
 }
 
 fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
@@ -152,7 +161,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
     Router::new()
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
-            get(hugrs::server::file_resolve).head(hugrs::server::file_resolve),
+            get(hugrs::server::handle_file_proxy).head(hugrs::server::handle_file_proxy),
         )
         .with_state(state)
 }

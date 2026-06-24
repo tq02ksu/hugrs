@@ -51,6 +51,7 @@ fn main() -> anyhow::Result<()> {
         };
         let http_client = hf::build_client(&config)?;
         let head_client = hf::build_head_client(&config)?;
+        let stream_client = hf::build_stream_client(&config)?;
         let service = CacheService::new(
             metadata,
             backend,
@@ -59,6 +60,7 @@ fn main() -> anyhow::Result<()> {
             head_client,
             config.storage.prefetch_depth,
             config.storage.verify_sha256,
+            stream_client,
         );
 
         match cli.command {
@@ -102,6 +104,8 @@ fn main() -> anyhow::Result<()> {
                 println!("Total size:        {} bytes", stats.total_size);
                 println!("Unique size:       {} bytes", stats.unique_size);
                 println!("Compression ratio: {:.2}%", stats.compression_ratio * 100.0);
+                println!("Fetched (upstream): {}", format_bytes(stats.fetched_bytes));
+                println!("Served (client):    {}", format_bytes(stats.served_bytes));
                 if let Some(limit) = config.storage.max_size {
                     let pct = (stats.total_size as u64 * 100)
                         .checked_div(limit)
@@ -128,4 +132,15 @@ fn main() -> anyhow::Result<()> {
 
         anyhow::Ok(())
     })
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    format!("{} ({:.2} {})", bytes, size, UNITS[unit_idx])
 }

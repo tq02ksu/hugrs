@@ -44,6 +44,8 @@ pub struct Stats {
     pub total_size: i64,
     pub unique_size: i64,
     pub compression_ratio: f64,
+    pub fetched_bytes: u64,
+    pub served_bytes: u64,
 }
 
 pub struct MetadataStore {
@@ -457,6 +459,8 @@ impl MetadataStore {
             total_size,
             unique_size,
             compression_ratio,
+            fetched_bytes: 0,
+            served_bytes: 0,
         })
     }
 

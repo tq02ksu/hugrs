@@ -4,12 +4,16 @@ use crate::storage::StorageBackend;
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::{BinaryHeap, HashMap};
-use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 pub const CHUNK_SIZE: usize = crate::service::CHUNK_SIZE;
+
+type ClientRange = (u64, u64);
+type ClientSender = mpsc::Sender<Result<Bytes, anyhow::Error>>;
+type Subscribers = StdMutex<Vec<(ClientRange, ClientSender)>>;
 
 // ── TrunkSession ──────────────────────────────────────────────
 
@@ -19,7 +23,7 @@ pub struct TrunkSession {
 }
 
 pub struct SessionTable {
-    map: DashMap<(i64, i64), Arc<TrunkSession>>,
+    map: Arc<DashMap<(i64, i64), Arc<TrunkSession>>>,
     http_client: reqwest::Client,
     backend: Arc<dyn StorageBackend>,
     metadata: Arc<MetadataStore>,
@@ -34,7 +38,7 @@ impl SessionTable {
         fetched_bytes: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            map: DashMap::new(),
+            map: Arc::new(DashMap::new()),
             http_client,
             backend,
             metadata,
@@ -42,7 +46,8 @@ impl SessionTable {
         }
     }
 
-    pub fn subscribe(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn subscribe(
         &self,
         file_id: i64,
         chunk_idx: i64,
@@ -53,6 +58,15 @@ impl SessionTable {
         chunk_count: usize,
     ) -> broadcast::Receiver<Arc<Bytes>> {
         let key = (file_id, chunk_idx);
+
+        if let Ok(Some(sha)) = self.metadata.is_chunk_linked(file_id, chunk_idx as usize) {
+            if let Ok(data) = self.backend.get(&sha).await {
+                let (tx, _) = broadcast::channel::<Arc<Bytes>>(1);
+                let rx = tx.subscribe();
+                let _ = tx.send(Arc::new(Bytes::from(data)));
+                return rx;
+            }
+        }
 
         if let Some(session) = self.map.get(&key) {
             return session.tx.subscribe();
@@ -67,11 +81,20 @@ impl SessionTable {
         let url = url.to_string();
         let tx2 = tx.clone();
         let fetched_bytes = self.fetched_bytes.clone();
-
-        tokio::spawn(async move {
+        let map = self.map.clone();
+        let task = tokio::spawn(async move {
             match Self::download_and_store(
-                client, backend, metadata, url, fetched_bytes,
-                file_id, chunk_idx, start, end, total_size, chunk_count,
+                client,
+                backend,
+                metadata,
+                url,
+                fetched_bytes,
+                file_id,
+                chunk_idx,
+                start,
+                end,
+                total_size,
+                chunk_count,
             )
             .await
             {
@@ -83,18 +106,20 @@ impl SessionTable {
                     tracing::warn!("chunk {} download failed: {}", chunk_idx, e);
                 }
             }
+            map.remove(&key);
         });
 
         self.map.insert(
             key,
             Arc::new(TrunkSession {
                 tx: tx2,
-                _task: tokio::spawn(async {}), // placeholder, actual task is spawned above
+                _task: task,
             }),
         );
         rx
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn download_and_store(
         client: reqwest::Client,
         backend: Arc<dyn StorageBackend>,
@@ -158,7 +183,7 @@ impl SessionTable {
             data.len()
         );
 
-        Ok(Some(Bytes::from(data)))
+        Ok(Some(data))
     }
 }
 
@@ -193,7 +218,7 @@ pub struct FileDownloadSession {
     chunk_count: usize,
 
     subscriber_count: AtomicUsize,
-    subscribers: StdMutex<Vec<((u64, u64), mpsc::Sender<Result<Bytes, anyhow::Error>>)>>,
+    subscribers: Subscribers,
 
     session_table: Arc<SessionTable>,
     metadata: Arc<MetadataStore>,
@@ -203,7 +228,8 @@ pub struct FileDownloadSession {
 
     task: StdMutex<Option<JoinHandle<()>>>,
     state: AtomicU8,
-    file_ready_tx: StdMutex<Option<oneshot::Sender<(File, u64)>>>,
+    file_ready: AtomicBool,
+    file_data: StdMutex<Option<(File, u64)>>,
 }
 
 impl FileDownloadSession {
@@ -221,7 +247,6 @@ impl FileDownloadSession {
         head_client: reqwest::Client,
         served_bytes: Arc<AtomicU64>,
     ) -> Self {
-        let (ftx, _) = oneshot::channel();
         Self {
             file_id,
             name,
@@ -238,14 +263,14 @@ impl FileDownloadSession {
             served_bytes,
             task: StdMutex::new(None),
             state: AtomicU8::new(0),
-            file_ready_tx: StdMutex::new(Some(ftx)),
+            file_ready: AtomicBool::new(false),
+            file_data: StdMutex::new(None),
         }
     }
 
     fn signal_file_ready(&self, file: File, total_size: u64) {
-        if let Some(tx) = self.file_ready_tx.lock().unwrap().take() {
-            let _ = tx.send((file, total_size));
-        }
+        self.file_data.lock().unwrap().replace((file, total_size));
+        self.file_ready.store(true, Ordering::SeqCst);
     }
 
     pub async fn subscribe(
@@ -276,36 +301,17 @@ impl FileDownloadSession {
             subs.push(((req_start, req_end), tx));
         }
         self.subscriber_count.fetch_add(1, Ordering::Relaxed);
+
+        let file = self.ensure_file_metadata().await?;
+        self.signal_file_ready(file.clone(), total_size);
+
         self.ensure_running();
 
-        let (file, cl) = self.wait_for_file_ready(content_length).await?;
-        Ok((file, cl, tokio_stream::wrappers::ReceiverStream::new(rx)))
-    }
-
-    async fn wait_for_file_ready(&self, content_length: u64) -> anyhow::Result<(File, u64)> {
-        let rx = {
-            let mut guard = self.file_ready_tx.lock().unwrap();
-            if guard.is_some() {
-                let (tx, rx) = oneshot::channel();
-                *guard = Some(tx);
-                Some(rx)
-            } else {
-                None
-            }
-        };
-
-        if let Some(rx) = rx {
-            rx.await
-                .map_err(|_| anyhow::anyhow!("file session closed"))
-        } else {
-            let f = self
-                .metadata
-                .get_file_by_name(&self.name)?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("file {} not found after session start", self.name)
-                })?;
-            Ok((f, content_length))
-        }
+        Ok((
+            file,
+            content_length,
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
     }
 
     fn ensure_running(self: &Arc<Self>) {
@@ -321,20 +327,17 @@ impl FileDownloadSession {
 
     async fn run_download_loop(self: Arc<Self>) {
         let session_start = std::time::Instant::now();
-        if let Err(e) = self.ensure_file_metadata().await {
-            tracing::error!("Failed to get file metadata for {}: {}", self.name, e);
-            return;
-        }
 
         tracing::info!(
-            "[f{}] {}: session started, {} trunks total, metadata in {}ms",
+            "[f{}] {}: session started, {} trunks total",
             self.file_id,
             self.name,
             self.chunk_count,
-            session_start.elapsed().as_millis()
         );
 
         let chunk_sz = CHUNK_SIZE as u64;
+
+        let mut completed: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
         loop {
             let client_ranges: Vec<(u64, u64)> = {
@@ -342,8 +345,18 @@ impl FileDownloadSession {
                 subs.iter().map(|(r, _)| *r).collect()
             };
 
+            tracing::debug!(
+                "[f{}] {}: loop start, subscribers={}, completed={}/{}",
+                self.file_id,
+                self.name,
+                client_ranges.len(),
+                completed.len(),
+                self.chunk_count,
+            );
+
             if client_ranges.is_empty() {
                 self.state.store(2, Ordering::Relaxed);
+                self.subscribers.lock().unwrap().clear();
                 break;
             }
 
@@ -352,6 +365,9 @@ impl FileDownloadSession {
                 let first = (*s / chunk_sz) as i64;
                 let last = ((*e / chunk_sz) as i64).min(self.chunk_count as i64 - 1);
                 for i in first..=last {
+                    if completed.contains(&(i as usize)) {
+                        continue;
+                    }
                     *trunk_prio.entry(i).or_insert(0) += 1;
                 }
             }
@@ -370,15 +386,18 @@ impl FileDownloadSession {
                 let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
 
                 let trunk_start = std::time::Instant::now();
-                let mut rx = self.session_table.subscribe(
-                    self.file_id,
-                    i as i64,
-                    &self.url,
-                    start,
-                    end,
-                    self.total_size,
-                    self.chunk_count,
-                );
+                let mut rx = self
+                    .session_table
+                    .subscribe(
+                        self.file_id,
+                        i as i64,
+                        &self.url,
+                        start,
+                        end,
+                        self.total_size,
+                        self.chunk_count,
+                    )
+                    .await;
 
                 match rx.recv().await {
                     Ok(data) => {
@@ -417,17 +436,22 @@ impl FileDownloadSession {
                                     pstart + CHUNK_SIZE as u64 - 1,
                                     self.total_size - 1,
                                 );
-                                let _ = self.session_table.subscribe(
-                                    self.file_id,
-                                    j as i64,
-                                    &self.url,
-                                    pstart,
-                                    pend,
-                                    self.total_size,
-                                    self.chunk_count,
-                                );
+                                let _ = self
+                                    .session_table
+                                    .subscribe(
+                                        self.file_id,
+                                        j as i64,
+                                        &self.url,
+                                        pstart,
+                                        pend,
+                                        self.total_size,
+                                        self.chunk_count,
+                                    )
+                                    .await;
                             }
                         }
+
+                        completed.insert(i);
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         tracing::warn!("chunk {} download closed unexpectedly", i);
@@ -438,6 +462,7 @@ impl FileDownloadSession {
                 }
             } else {
                 self.state.store(2, Ordering::Relaxed);
+                self.subscribers.lock().unwrap().clear();
                 break;
             }
 
@@ -448,8 +473,10 @@ impl FileDownloadSession {
             self.signal_file_ready(f.clone(), f.total_size as u64);
         }
 
+        self.subscribers.lock().unwrap().clear();
+
         tracing::info!(
-            "[f{}] {}: session finished in {}ms",
+            "[f{}] {}: session finished in {}ms, all senders dropped",
             self.file_id,
             self.name,
             session_start.elapsed().as_millis()
@@ -564,7 +591,7 @@ impl FileDownloadSession {
     }
 
     async fn forward_chunk(&self, chunk_start: u64, data: &[u8]) {
-        let targets: Vec<((u64, u64), mpsc::Sender<Result<Bytes, anyhow::Error>>)> = {
+        let targets: Vec<(ClientRange, ClientSender)> = {
             let subs = self.subscribers.lock().unwrap();
             subs.iter()
                 .map(|((s, e), tx)| ((*s, *e), tx.clone()))
@@ -593,8 +620,7 @@ impl FileDownloadSession {
     fn clean_subscribers(&self) {
         let mut subs = self.subscribers.lock().unwrap();
         subs.retain(|(_, tx)| !tx.is_closed());
-        self.subscriber_count
-            .store(subs.len(), Ordering::Relaxed);
+        self.subscriber_count.store(subs.len(), Ordering::Relaxed);
     }
 }
 
