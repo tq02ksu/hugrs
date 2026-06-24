@@ -320,10 +320,19 @@ impl FileDownloadSession {
     }
 
     async fn run_download_loop(self: Arc<Self>) {
+        let session_start = std::time::Instant::now();
         if let Err(e) = self.ensure_file_metadata().await {
             tracing::error!("Failed to get file metadata for {}: {}", self.name, e);
             return;
         }
+
+        tracing::info!(
+            "[f{}] {}: session started, {} trunks total, metadata in {}ms",
+            self.file_id,
+            self.name,
+            self.chunk_count,
+            session_start.elapsed().as_millis()
+        );
 
         let chunk_sz = CHUNK_SIZE as u64;
 
@@ -360,6 +369,7 @@ impl FileDownloadSession {
                 let start = (i * CHUNK_SIZE) as u64;
                 let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
 
+                let trunk_start = std::time::Instant::now();
                 let mut rx = self.session_table.subscribe(
                     self.file_id,
                     i as i64,
@@ -372,10 +382,32 @@ impl FileDownloadSession {
 
                 match rx.recv().await {
                     Ok(data) => {
+                        let elapsed_ms = trunk_start.elapsed().as_millis();
                         let chunk_start = i as u64 * chunk_sz;
                         self.forward_chunk(chunk_start, &data).await;
                         self.served_bytes
                             .fetch_add(data.len() as u64, Ordering::Relaxed);
+
+                        tracing::info!(
+                            "[f{}] {} trunk {}/{}: {} bytes in {}ms",
+                            self.file_id,
+                            self.name,
+                            i + 1,
+                            self.chunk_count,
+                            data.len(),
+                            elapsed_ms,
+                        );
+                        if elapsed_ms > 5_000 {
+                            tracing::warn!(
+                                "[f{}] {} trunk {}/{}: SLOW — {} bytes in {}ms",
+                                self.file_id,
+                                self.name,
+                                i + 1,
+                                self.chunk_count,
+                                data.len(),
+                                elapsed_ms,
+                            );
+                        }
 
                         let step = self.prefetch_step();
                         for j in (i + 1)..(i + 1 + step).min(self.chunk_count) {
@@ -415,6 +447,13 @@ impl FileDownloadSession {
         if let Ok(Some(f)) = self.metadata.get_file_by_name(&self.name) {
             self.signal_file_ready(f.clone(), f.total_size as u64);
         }
+
+        tracing::info!(
+            "[f{}] {}: session finished in {}ms",
+            self.file_id,
+            self.name,
+            session_start.elapsed().as_millis()
+        );
     }
 
     async fn ensure_file_metadata(&self) -> anyhow::Result<File> {

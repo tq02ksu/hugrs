@@ -32,16 +32,20 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
         .route("/", get(root))
         .route("/api/whoami-v2", get(whoami))
         .route(
+            "/api/models/{org}/{repo}",
+            get(handle_api_proxy_simple).head(handle_api_proxy_simple),
+        )
+        .route(
             "/api/models/{org}/{repo}/revision/{revision}",
-            get(model_info_revision).head(model_info_revision),
+            get(handle_api_proxy).head(handle_api_proxy),
         )
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
-            get(file_resolve).head(file_resolve),
+            get(handle_file_proxy).head(handle_file_proxy),
         )
         .route(
             "/api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{*path}",
-            get(resolve_cache).head(resolve_cache),
+            get(handle_file_proxy).head(handle_file_proxy),
         )
         .route("/api/stats", get(stats))
         .route("/api/agent-harnesses", get(agent_harnesses))
@@ -101,9 +105,25 @@ async fn whoami() -> Result<Json<serde_json::Value>, AppError> {
     })))
 }
 
-async fn model_info_revision(
+async fn handle_api_proxy_simple(
+    State(state): State<AppState>,
+    Path((org, repo)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    proxy_model_info(state, org, repo, "main".to_string()).await
+}
+
+async fn handle_api_proxy(
     State(state): State<AppState>,
     Path((org, repo, revision)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    proxy_model_info(state, org, repo, revision).await
+}
+
+async fn proxy_model_info(
+    state: AppState,
+    org: String,
+    repo: String,
+    revision: String,
 ) -> Result<Response, AppError> {
     let repo_id = format!("{}/{}", org, repo);
     let url = format!(
@@ -171,7 +191,7 @@ async fn model_info_revision(
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
-pub async fn file_resolve(
+pub async fn handle_file_proxy(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
@@ -180,50 +200,6 @@ pub async fn file_resolve(
     let repo_id = format!("{}/{}", org, repo);
     let cache_name = format!("{}/{}", repo_id, path);
     let range = parse_range(&headers);
-    serve_file(
-        &state,
-        method,
-        &repo_id,
-        &cache_name,
-        &revision,
-        &path,
-        range,
-    )
-    .await
-}
-
-async fn resolve_cache(
-    State(state): State<AppState>,
-    method: Method,
-    headers: HeaderMap,
-    Path((_repo_type, org, repo, revision, path)): Path<(String, String, String, String, String)>,
-) -> Result<Response, AppError> {
-    let repo_id = format!("{}/{}", org, repo);
-    let cache_name = format!("{}/{}", repo_id, path);
-    let range = parse_range(&headers);
-    serve_file(
-        &state,
-        method,
-        &repo_id,
-        &cache_name,
-        &revision,
-        &path,
-        range,
-    )
-    .await
-}
-
-async fn serve_file(
-    state: &AppState,
-    method: Method,
-    repo_id: &str,
-    cache_name: &str,
-    revision: &str,
-    path: &str,
-    range: Option<(u64, Option<u64>)>,
-) -> Result<Response, AppError> {
-    tracing::debug!("{} {} cache={}", method, cache_name, cache_name);
-
     let url = format!(
         "{}/{}/resolve/{}/{}",
         state.config.huggingface.endpoint, repo_id, revision, path
@@ -231,10 +207,10 @@ async fn serve_file(
 
     if method == Method::HEAD {
         let service = state.service.lock().await;
-        if let Ok(Some(file)) = service.info(cache_name).await {
+        if let Ok(Some(file)) = service.info(&cache_name).await {
             if file.x_repo_commit.is_some() {
                 tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
-                return build_head_response(&file, path);
+                return build_head_response(&file, &path);
             }
             tracing::debug!(
                 "HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}",
@@ -323,16 +299,16 @@ async fn serve_file(
 
         if size > 0 {
             let service = state.service.lock().await;
-            service.ensure_file_headers(
-                cache_name,
-                repo_id,
+            let _ = service.ensure_file_headers(
+                &cache_name,
+                &repo_id,
                 size,
                 etag.as_deref(),
                 x_repo_commit.as_deref(),
                 xl_size,
                 x_linked_etag.as_deref(),
                 content_type.as_deref(),
-            )?;
+            );
             tracing::info!("cached HEAD metadata for {} ({} bytes)", cache_name, size);
         }
 
@@ -362,35 +338,45 @@ async fn serve_file(
             .map_err(|e| AppError::Anyhow(e.into()));
     }
 
+    // GET
+    let get_start = std::time::Instant::now();
     {
         let service = state.service.lock().await;
-        if service.is_file_complete(cache_name).await.unwrap_or(false) {
+        if service.is_file_complete(&cache_name).await.unwrap_or(false) {
             tracing::debug!("GET cache hit (streaming): {}", cache_name);
             let (file, content_length, stream) = service
-                .stream_cached_file(cache_name, range.map(|r| r.0), range.and_then(|r| r.1))
+                .stream_cached_file(&cache_name, range.map(|r| r.0), range.and_then(|r| r.1))
                 .await?;
-            return build_stream_response(file, content_length, stream, path, range);
+            tracing::info!(
+                "{}: cache hit, stream ready in {}ms",
+                cache_name,
+                get_start.elapsed().as_millis()
+            );
+            return build_stream_response(file, content_length, stream, &path, range);
         }
     }
 
-    tracing::info!("cache miss, streaming from upstream: {}", cache_name);
-
-    let svc = {
-        let guard = state.service.lock().await;
-        guard.clone()
-    };
-
-    let (file, content_length, stream) = svc
+    tracing::info!("cache miss, streaming via upstream: {}", cache_name);
+    let service = state.service.lock().await;
+    let (file, content_length, stream) = service
         .stream_from_upstream(
             &url,
-            cache_name,
-            repo_id,
+            &cache_name,
+            &repo_id,
             range.map(|r| r.0),
             range.and_then(|r| r.1),
         )
         .await?;
+    drop(service);
 
-    build_stream_response(file, content_length, stream, path, range)
+    tracing::info!(
+        "{}: cache miss session ready, {}GB, stream in {}ms",
+        cache_name,
+        file.total_size as f64 / 1_073_741_824.0,
+        get_start.elapsed().as_millis()
+    );
+
+    build_stream_response(file, content_length, stream, &path, range)
 }
 
 fn build_head_response(file: &crate::metadata::File, path: &str) -> Result<Response, AppError> {
