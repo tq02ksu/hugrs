@@ -3,7 +3,7 @@ use crate::metadata::{File, MetadataStore};
 use crate::storage::StorageBackend;
 use bytes::Bytes;
 use dashmap::DashMap;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, mpsc};
@@ -14,6 +14,47 @@ pub const CHUNK_SIZE: usize = crate::service::CHUNK_SIZE;
 type ClientRange = (u64, u64);
 type ClientSender = mpsc::Sender<Result<Bytes, anyhow::Error>>;
 type Subscribers = StdMutex<Vec<(ClientRange, ClientSender)>>;
+
+fn prefetch_budget(active_cursors: usize) -> usize {
+    match active_cursors {
+        0 | 1 => 16,
+        2 => 8,
+        _ => 4,
+    }
+}
+
+fn compute_active_cursors(
+    client_ranges: &[ClientRange],
+    completed: &std::collections::HashSet<usize>,
+    chunk_sz: u64,
+    chunk_count: usize,
+) -> Vec<usize> {
+    let mut cursors = Vec::new();
+    let max_idx = chunk_count.saturating_sub(1);
+
+    for (start, end) in client_ranges {
+        let first = (*start / chunk_sz) as usize;
+        let last = ((*end / chunk_sz) as usize).min(max_idx);
+        if let Some(next) = (first..=last).find(|idx| !completed.contains(idx)) {
+            cursors.push(next);
+        }
+    }
+
+    cursors.sort_unstable();
+    cursors.dedup();
+    cursors
+}
+
+fn select_next_chunk(
+    client_ranges: &[ClientRange],
+    completed: &std::collections::HashSet<usize>,
+    chunk_sz: u64,
+    chunk_count: usize,
+) -> Option<usize> {
+    compute_active_cursors(client_ranges, completed, chunk_sz, chunk_count)
+        .into_iter()
+        .next()
+}
 
 // ── TrunkSession ──────────────────────────────────────────────
 
@@ -189,26 +230,6 @@ impl SessionTable {
 
 // ── FileDownloadSession ───────────────────────────────────────
 
-#[derive(PartialEq, Eq)]
-struct TrunkPriority {
-    index: i64,
-    priority: usize,
-}
-
-impl PartialOrd for TrunkPriority {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for TrunkPriority {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.priority
-            .cmp(&other.priority)
-            .then_with(|| self.index.cmp(&other.index))
-    }
-}
-
 pub struct FileDownloadSession {
     file_id: i64,
     name: String,
@@ -337,7 +358,7 @@ impl FileDownloadSession {
 
         let chunk_sz = CHUNK_SIZE as u64;
 
-        let mut completed: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut completed: HashSet<usize> = HashSet::new();
 
         loop {
             let client_ranges: Vec<(u64, u64)> = {
@@ -360,28 +381,12 @@ impl FileDownloadSession {
                 break;
             }
 
-            let mut trunk_prio: HashMap<i64, usize> = HashMap::new();
-            for (s, e) in &client_ranges {
-                let first = (*s / chunk_sz) as i64;
-                let last = ((*e / chunk_sz) as i64).min(self.chunk_count as i64 - 1);
-                for i in first..=last {
-                    if completed.contains(&(i as usize)) {
-                        continue;
-                    }
-                    *trunk_prio.entry(i).or_insert(0) += 1;
-                }
-            }
+            let active_cursors =
+                compute_active_cursors(&client_ranges, &completed, chunk_sz, self.chunk_count);
 
-            let mut heap = BinaryHeap::new();
-            for (idx, prio) in trunk_prio {
-                heap.push(TrunkPriority {
-                    index: idx,
-                    priority: prio,
-                });
-            }
-
-            if let Some(next) = heap.pop() {
-                let i = next.index as usize;
+            if let Some(i) =
+                select_next_chunk(&client_ranges, &completed, chunk_sz, self.chunk_count)
+            {
                 let start = (i * CHUNK_SIZE) as u64;
                 let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
 
@@ -428,9 +433,13 @@ impl FileDownloadSession {
                             );
                         }
 
-                        let step = self.prefetch_step();
-                        for j in (i + 1)..(i + 1 + step).min(self.chunk_count) {
-                            if !self.is_trunk_cached(j).await {
+                        let budget = prefetch_budget(active_cursors.len());
+                        let per_cursor = (budget / active_cursors.len().max(1)).max(1);
+                        for cursor in active_cursors {
+                            for j in (cursor + 1)..(cursor + 1 + per_cursor).min(self.chunk_count) {
+                                if completed.contains(&j) || self.is_trunk_cached(j).await {
+                                    continue;
+                                }
                                 let pstart = (j * CHUNK_SIZE) as u64;
                                 let pend = std::cmp::min(
                                     pstart + CHUNK_SIZE as u64 - 1,
@@ -578,11 +587,6 @@ impl FileDownloadSession {
         Ok(file)
     }
 
-    fn prefetch_step(&self) -> usize {
-        let count = self.subscriber_count.load(Ordering::Relaxed).max(1);
-        (16 / count).max(4)
-    }
-
     async fn is_trunk_cached(&self, i: usize) -> bool {
         match self.metadata.is_chunk_linked(self.file_id, i) {
             Ok(Some(sha)) => self.backend.exists(&sha).await.unwrap_or(false),
@@ -684,5 +688,38 @@ impl FileSessionManager {
 
     pub fn remove(&self, file_id: i64) {
         self.map.remove(&file_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_active_cursors, prefetch_budget, select_next_chunk};
+    use std::collections::HashSet;
+
+    #[test]
+    fn single_subscriber_picks_smallest_incomplete_chunk() {
+        let completed = HashSet::from([0usize, 1, 2]);
+        let client_ranges = vec![(0u64, 9 * 4 * 1024 * 1024u64)];
+
+        let next = select_next_chunk(&client_ranges, &completed, 4 * 1024 * 1024, 10);
+
+        assert_eq!(next, Some(3));
+    }
+
+    #[test]
+    fn active_cursors_deduplicate_and_budget_drops_with_more_cursors() {
+        let completed = HashSet::new();
+        let client_ranges = vec![
+            (0u64, 9 * 4 * 1024 * 1024u64),
+            (0u64, 9 * 4 * 1024 * 1024u64),
+            (20 * 4 * 1024 * 1024u64, 29 * 4 * 1024 * 1024u64),
+        ];
+
+        let cursors = compute_active_cursors(&client_ranges, &completed, 4 * 1024 * 1024, 30);
+
+        assert_eq!(cursors, vec![0, 20]);
+        assert_eq!(prefetch_budget(1), 16);
+        assert_eq!(prefetch_budget(2), 8);
+        assert_eq!(prefetch_budget(3), 4);
     }
 }
