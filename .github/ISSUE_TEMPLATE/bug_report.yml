@@ -1,0 +1,81 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem description
+      description: Describe what happened and what part of HugRS is affected.
+      placeholder: The proxy returned an unexpected response when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reproducible sequence.
+      placeholder: |
+        1. Start HugRS with ...
+        2. Send request to ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: HugRS should...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: HugRS actually...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release version, commit SHA, or branch name.
+      placeholder: v0.1.1
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, deployment method, storage backend, and relevant config.
+      placeholder: |
+        - OS:
+        - Run mode: cargo run / Docker / binary
+        - Storage: local / S3
+        - HF endpoint:
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: Paste relevant logs, error messages, or screenshots.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues before submitting this report.
+          required: true
+        - label: I can reproduce this problem with the information above.
+          required: true
