@@ -10,6 +10,10 @@ use tokio_stream::wrappers::ReceiverStream;
 
 pub const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
+pub(crate) fn use_get_for_first_hop_probe(source: &str, url: &str) -> bool {
+    source == "ms" && url.contains("/api/v1/models/") && url.contains("/repo?")
+}
+
 pub type ByteStream = ReceiverStream<Result<Bytes, anyhow::Error>>;
 
 struct DownloadedChunk {
@@ -80,14 +84,20 @@ impl CacheService {
         }
     }
 
-    pub async fn upload(&self, name: &str, repo: &str, data: Vec<u8>) -> anyhow::Result<()> {
+    pub async fn upload(
+        &self,
+        name: &str,
+        repo: &str,
+        source: &str,
+        data: Vec<u8>,
+    ) -> anyhow::Result<()> {
         let total_size = data.len() as i64;
 
-        self.metadata.delete_file(name)?;
+        self.metadata.delete_file(name, source)?;
 
         let chunks = chunker::chunk_with_hashes(&data, CHUNK_SIZE);
 
-        let file = self.metadata.add_file(name, repo, total_size, "upload")?;
+        let file = self.metadata.add_file(name, repo, total_size, source)?;
 
         for chunk in &chunks {
             let stored_size: i64 = if !self.backend.exists(&chunk.sha256).await? {
@@ -127,9 +137,10 @@ impl CacheService {
         url: &str,
         name: &str,
         repo: &str,
+        source: &str,
         concurrency: usize,
     ) -> anyhow::Result<()> {
-        if self.is_file_complete(name).await? {
+        if self.is_file_complete(name, source).await? {
             tracing::info!("{} already cached, skipping", name);
             self.metadata.touch_repo(repo)?;
             return Ok(());
@@ -143,7 +154,7 @@ impl CacheService {
             .get("x-repo-commit")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let x_linked_size = first_headers
+        let x_linked_size: Option<i64> = first_headers
             .get("x-linked-size")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse().ok());
@@ -207,10 +218,11 @@ impl CacheService {
                 .await?;
             self.fetched_bytes
                 .fetch_add(data.len() as u64, Ordering::Relaxed);
-            self.metadata.delete_file(name)?;
-            self.upload(name, repo, data.to_vec()).await?;
+            self.metadata.delete_file(name, source)?;
+            self.upload(name, repo, source, data.to_vec()).await?;
             self.metadata.set_file_headers(
                 name,
+                source,
                 etag.as_deref(),
                 x_repo_commit.as_deref(),
                 x_linked_size,
@@ -222,13 +234,13 @@ impl CacheService {
 
         let chunk_count = (total_size as usize).div_ceil(CHUNK_SIZE);
 
-        let (file_id, completed) = match self.metadata.get_file_by_name(name)? {
+        let (file_id, completed) = match self.metadata.get_file_by_name(name, source)? {
             Some(existing) => {
                 if existing.total_size as u64 != total_size {
-                    self.metadata.delete_file(name)?;
+                    self.metadata.delete_file(name, source)?;
                     let file = self
                         .metadata
-                        .add_file(name, repo, total_size as i64, "pull")?;
+                        .add_file(name, repo, total_size as i64, source)?;
                     (file.id, HashSet::new())
                 } else {
                     let trunks = self.metadata.get_file_trunks(existing.id)?;
@@ -240,7 +252,7 @@ impl CacheService {
             None => {
                 let file = self
                     .metadata
-                    .add_file(name, repo, total_size as i64, "pull")?;
+                    .add_file(name, repo, total_size as i64, source)?;
                 (file.id, HashSet::new())
             }
         };
@@ -253,6 +265,7 @@ impl CacheService {
             self.metadata.touch_repo(repo)?;
             self.metadata.set_file_headers(
                 name,
+                source,
                 etag.as_deref(),
                 x_repo_commit.as_deref(),
                 x_linked_size,
@@ -346,6 +359,7 @@ impl CacheService {
 
         self.metadata.set_file_headers(
             name,
+            source,
             etag.as_deref(),
             x_repo_commit.as_deref(),
             x_linked_size,
@@ -360,10 +374,10 @@ impl CacheService {
         Ok(())
     }
 
-    pub async fn download(&self, name: &str) -> anyhow::Result<Vec<u8>> {
+    pub async fn download(&self, name: &str, source: &str) -> anyhow::Result<Vec<u8>> {
         let file = self
             .metadata
-            .get_file_by_name(name)?
+            .get_file_by_name(name, source)?
             .ok_or_else(|| anyhow::anyhow!("file not found: {}", name))?;
 
         let repo = file.repo.clone();
@@ -392,8 +406,8 @@ impl CacheService {
         Ok(chunker::assemble_chunks(&chunks))
     }
 
-    pub async fn is_file_complete(&self, name: &str) -> anyhow::Result<bool> {
-        let file = match self.metadata.get_file_by_name(name)? {
+    pub async fn is_file_complete(&self, name: &str, source: &str) -> anyhow::Result<bool> {
+        let file = match self.metadata.get_file_by_name(name, source)? {
             Some(f) => f,
             None => return Ok(false),
         };
@@ -421,6 +435,7 @@ impl CacheService {
         &self,
         name: &str,
         repo: &str,
+        source: &str,
         total_size: u64,
         etag: Option<&str>,
         x_repo_commit: Option<&str>,
@@ -428,13 +443,14 @@ impl CacheService {
         x_linked_etag: Option<&str>,
         content_type: Option<&str>,
     ) -> anyhow::Result<()> {
-        if self.metadata.get_file_by_name(name)?.is_none() {
-            self.metadata.delete_file(name)?;
+        if self.metadata.get_file_by_name(name, source)?.is_none() {
+            self.metadata.delete_file(name, source)?;
             self.metadata
-                .add_file(name, repo, total_size as i64, "pull")?;
+                .add_file(name, repo, total_size as i64, source)?;
         }
         self.metadata.set_file_headers(
             name,
+            source,
             etag,
             x_repo_commit,
             x_linked_size,
@@ -444,12 +460,12 @@ impl CacheService {
         Ok(())
     }
 
-    pub async fn info(&self, name: &str) -> anyhow::Result<Option<File>> {
-        self.metadata.get_file_by_name(name)
+    pub async fn info(&self, name: &str, source: &str) -> anyhow::Result<Option<File>> {
+        self.metadata.get_file_by_name(name, source)
     }
 
-    pub async fn delete(&self, name: &str) -> anyhow::Result<bool> {
-        self.metadata.delete_file(name)
+    pub async fn delete(&self, name: &str, source: &str) -> anyhow::Result<bool> {
+        self.metadata.delete_file(name, source)
     }
 
     pub async fn list(&self) -> anyhow::Result<Vec<File>> {
@@ -534,12 +550,13 @@ impl CacheService {
     pub async fn stream_cached_file(
         &self,
         name: &str,
+        source: &str,
         range_start: Option<u64>,
         range_end: Option<u64>,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
         let file = self
             .metadata
-            .get_file_by_name(name)?
+            .get_file_by_name(name, source)?
             .ok_or_else(|| anyhow::anyhow!("file not found: {}", name))?;
 
         let total_size = file.total_size as u64;
@@ -723,19 +740,22 @@ impl CacheService {
         url: &str,
         name: &str,
         repo: &str,
+        source: &str,
         range_start: Option<u64>,
         range_end: Option<u64>,
+        user_agent: Option<&str>,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
-        self.fetch_file_metadata(url, name, repo).await?;
+        self.fetch_file_metadata(url, name, repo, source, user_agent)
+            .await?;
 
         let file = self
             .metadata
-            .get_file_by_name(name)?
+            .get_file_by_name(name, source)?
             .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?;
         let total_size = file.total_size as u64;
 
         if total_size <= CHUNK_SIZE as u64 {
-            return self.stream_small_file(url, name, &file).await;
+            return self.stream_small_file(url, name, &file, user_agent).await;
         }
 
         let session = self.fs_manager.get_or_create(
@@ -743,8 +763,10 @@ impl CacheService {
             name,
             repo,
             url,
+            source,
             total_size,
             self.prefetch_budget_base,
+            user_agent,
         );
         session
             .subscribe(Some((range_start.unwrap_or(0), range_end)))
@@ -756,6 +778,8 @@ impl CacheService {
         url: &str,
         name: &str,
         repo: &str,
+        source: &str,
+        user_agent: Option<&str>,
     ) -> anyhow::Result<(
         u64,
         Option<String>,
@@ -764,7 +788,15 @@ impl CacheService {
         Option<i64>,
         Option<String>,
     )> {
-        let head_resp = self.head_client.head(url).send().await?;
+        let mut req = if use_get_for_first_hop_probe(source, url) {
+            self.head_client.get(url)
+        } else {
+            self.head_client.head(url)
+        };
+        if let Some(ua) = user_agent {
+            req = req.header("User-Agent", ua);
+        }
+        let head_resp = req.send().await?;
         let first_headers = head_resp.headers();
         let status = head_resp.status();
 
@@ -788,7 +820,11 @@ impl CacheService {
                 .unwrap_or("");
             let location = crate::server::resolve_redirect(url, location);
             tracing::info!("fetch_file_metadata following redirect: {}", location);
-            match self.http_client.head(&location).send().await {
+            let mut req = self.http_client.head(&location);
+            if let Some(ua) = user_agent {
+                req = req.header("User-Agent", ua);
+            }
+            match req.send().await {
                 Ok(resp2) => {
                     let h = resp2.headers();
                     let cl: u64 = h
@@ -834,19 +870,20 @@ impl CacheService {
             anyhow::bail!("cannot determine file size for {}", url);
         }
 
-        let existing = self.metadata.get_file_by_name(name)?;
+        let existing = self.metadata.get_file_by_name(name, source)?;
         if existing
             .as_ref()
             .map(|f| f.total_size as u64 != size)
             .unwrap_or(true)
         {
-            self.metadata.delete_file(name)?;
+            self.metadata.delete_file(name, source)?;
         }
-        if self.metadata.get_file_by_name(name)?.is_none() {
-            self.metadata.add_file(name, repo, size as i64, "pull")?;
+        if self.metadata.get_file_by_name(name, source)?.is_none() {
+            self.metadata.add_file(name, repo, size as i64, source)?;
         }
         self.metadata.set_file_headers(
             name,
+            source,
             etag.as_deref(),
             x_repo_commit.as_deref(),
             x_linked_size,
@@ -870,9 +907,11 @@ impl CacheService {
         url: &str,
         name: &str,
         file: &File,
+        user_agent: Option<&str>,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
-        if self.is_file_complete(name).await? {
-            return self.stream_cached_file(name, None, None).await;
+        let source = file.source.clone();
+        if self.is_file_complete(name, &source).await? {
+            return self.stream_cached_file(name, &source, None, None).await;
         }
 
         let total_size = file.total_size as u64;
@@ -882,11 +921,16 @@ impl CacheService {
         let svc = self.clone();
         let fname = name.to_string();
         let frepo = file.repo.clone();
+        let user_agent = user_agent.map(str::to_string);
         let fetched_bytes = self.fetched_bytes.clone();
         let served_bytes = self.served_bytes.clone();
 
         tokio::spawn(async move {
-            let resp = match client.get(&url).send().await {
+            let mut req = client.get(&url);
+            if let Some(ref ua) = user_agent {
+                req = req.header("User-Agent", ua);
+            }
+            let resp = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = tx.send(Err(anyhow::anyhow!("request error: {}", e))).await;
@@ -901,7 +945,7 @@ impl CacheService {
                 }
             };
             fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-            if let Err(e) = svc.upload(&fname, &frepo, data.to_vec()).await {
+            if let Err(e) = svc.upload(&fname, &frepo, &source, data.to_vec()).await {
                 let _ = tx.send(Err(e)).await;
                 return;
             }

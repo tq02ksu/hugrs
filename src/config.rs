@@ -15,6 +15,9 @@ pub struct Config {
 
     #[serde(default)]
     pub huggingface: HfConfig,
+
+    #[serde(default)]
+    pub modelscope: MsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +91,22 @@ pub struct HfConfig {
     pub connect_timeout_secs: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MsConfig {
+    #[serde(default = "default_ms_endpoint")]
+    pub endpoint: String,
+
+    pub token: Option<String>,
+
+    pub proxy: Option<String>,
+
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+}
+
 fn default_backend() -> String {
     "local".into()
 }
@@ -118,6 +137,9 @@ fn default_port() -> u16 {
 }
 fn default_hf_endpoint() -> String {
     "https://huggingface.co".into()
+}
+fn default_ms_endpoint() -> String {
+    "https://modelscope.cn".into()
 }
 fn default_timeout_secs() -> u64 {
     60
@@ -173,6 +195,18 @@ impl Default for HfConfig {
     }
 }
 
+impl Default for MsConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: default_ms_endpoint(),
+            token: None,
+            proxy: None,
+            timeout_secs: default_timeout_secs(),
+            connect_timeout_secs: default_connect_timeout_secs(),
+        }
+    }
+}
+
 pub struct CliOverrides {
     pub db_path: Option<String>,
     pub storage_backend: Option<String>,
@@ -188,6 +222,11 @@ pub struct CliOverrides {
     pub hf_proxy: Option<String>,
     pub hf_timeout: Option<u64>,
     pub hf_connect_timeout: Option<u64>,
+    pub ms_endpoint: Option<String>,
+    pub ms_token: Option<String>,
+    pub ms_proxy: Option<String>,
+    pub ms_timeout: Option<u64>,
+    pub ms_connect_timeout: Option<u64>,
     pub config_file: Option<String>,
     pub compression: Option<String>,
     pub max_size: Option<u64>,
@@ -280,6 +319,21 @@ impl Config {
         if let Ok(val) = std::env::var("HUGRS_HF_CONNECT_TIMEOUT") {
             config.huggingface.connect_timeout_secs = val.parse()?;
         }
+        if let Ok(val) = std::env::var("HUGRS_MS_ENDPOINT") {
+            config.modelscope.endpoint = val;
+        }
+        if let Ok(val) = std::env::var("HUGRS_MS_TOKEN") {
+            config.modelscope.token = Some(val);
+        }
+        if let Ok(val) = std::env::var("HUGRS_MS_PROXY") {
+            config.modelscope.proxy = Some(val);
+        }
+        if let Ok(val) = std::env::var("HUGRS_MS_TIMEOUT") {
+            config.modelscope.timeout_secs = val.parse()?;
+        }
+        if let Ok(val) = std::env::var("HUGRS_MS_CONNECT_TIMEOUT") {
+            config.modelscope.connect_timeout_secs = val.parse()?;
+        }
 
         if let Some(v) = overrides.db_path {
             config.database.path = v.into();
@@ -337,6 +391,21 @@ impl Config {
         }
         if let Some(v) = overrides.hf_connect_timeout {
             config.huggingface.connect_timeout_secs = v;
+        }
+        if let Some(v) = overrides.ms_endpoint {
+            config.modelscope.endpoint = v;
+        }
+        if let Some(v) = overrides.ms_token {
+            config.modelscope.token = Some(v);
+        }
+        if let Some(v) = overrides.ms_proxy {
+            config.modelscope.proxy = Some(v);
+        }
+        if let Some(v) = overrides.ms_timeout {
+            config.modelscope.timeout_secs = v;
+        }
+        if let Some(v) = overrides.ms_connect_timeout {
+            config.modelscope.connect_timeout_secs = v;
         }
 
         Ok(config)

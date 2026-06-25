@@ -76,6 +76,18 @@ hugrs --max-size 10737418240 serve
 | `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | `--hf-endpoint` | HF Hub 地址，可设为 `https://hf-mirror.com` |
 | `token` | string | — | `HUGRS_HF_TOKEN` | `--hf-token` | HF API Token（访问私有/受限模型） |
 | `proxy` | string | — | `HUGRS_HF_PROXY` | `--hf-proxy` | HTTP 代理地址，如 `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_HF_TIMEOUT` | `--hf-timeout` | 请求超时（秒） |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_HF_CONNECT_TIMEOUT` | `--hf-connect-timeout` | 连接超时（秒） |
+
+### `[modelscope]` — ModelScope Hub 配置
+
+| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
+|--------|------|--------|----------|----------|------|
+| `endpoint` | string | `"https://modelscope.cn"` | `HUGRS_MS_ENDPOINT` | `--ms-endpoint` | ModelScope Hub 地址 |
+| `token` | string | — | `HUGRS_MS_TOKEN` | `--ms-token` | ModelScope API Token（访问私有模型） |
+| `proxy` | string | — | `HUGRS_MS_PROXY` | `--ms-proxy` | HTTP 代理地址，如 `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_MS_TIMEOUT` | `--ms-timeout` | 请求超时（秒） |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_MS_CONNECT_TIMEOUT` | `--ms-connect-timeout` | 连接超时（秒） |
 
 ---
 
@@ -98,6 +110,9 @@ port = 3000
 
 [huggingface]
 endpoint = "https://huggingface.co"
+
+[modelscope]
+endpoint = "https://modelscope.cn"
 ```
 
 ### 生产环境（S3 + 镜像站 + 代理 + 容量限制）
@@ -121,6 +136,9 @@ port = 3000
 [huggingface]
 endpoint = "https://hf-mirror.com"
 proxy = "http://proxy.internal:8080"
+
+[modelscope]
+endpoint = "https://modelscope.cn"
 ```
 
 ### MinIO / 自建 S3 兼容存储
@@ -161,6 +179,10 @@ HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=8080
 HUGRS_HF_ENDPOINT=https://hf-mirror.com
 HUGRS_HF_PROXY=http://proxy:3128
+HUGRS_HF_TIMEOUT=60
+HUGRS_HF_CONNECT_TIMEOUT=15
+HUGRS_MS_ENDPOINT=https://modelscope.cn
+HUGRS_MS_PROXY=http://proxy:3128
 ```
 
 ---
@@ -186,6 +208,13 @@ hugrs [全局参数] <子命令>
       --hf-endpoint <URL>      HF Hub 地址
       --hf-token <TOKEN>       HF API Token
       --hf-proxy <URL>         HTTP 代理
+      --hf-timeout <SECS>      HF 请求超时
+      --hf-connect-timeout <SECS>  HF 连接超时
+      --ms-endpoint <URL>      ModelScope Hub 地址
+      --ms-token <TOKEN>       ModelScope API Token
+      --ms-proxy <URL>         ModelScope HTTP 代理
+      --ms-timeout <SECS>      ModelScope 请求超时
+      --ms-connect-timeout <SECS>  ModelScope 连接超时
       --max-size <BYTES>       最大磁盘占用
       --prefetch-depth <N>     缓存预读深度（0=自动）
       --prefetch-budget-base <N>  流式下载的 chunk 预取预算基数
@@ -216,4 +245,9 @@ HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=3000
 HUGRS_HF_ENDPOINT=https://hf-mirror.com
 HUGRS_HF_PROXY=http://proxy:8080
+HUGRS_HF_TIMEOUT=60
+HUGRS_HF_CONNECT_TIMEOUT=15
+HUGRS_MS_ENDPOINT=https://modelscope.cn
+HUGRS_MS_TIMEOUT=60
+HUGRS_MS_CONNECT_TIMEOUT=15
 ```

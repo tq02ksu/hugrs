@@ -52,6 +52,33 @@ fn main() -> anyhow::Result<()> {
         let http_client = hf::build_client(&config)?;
         let head_client = hf::build_head_client(&config)?;
         let stream_client = hf::build_stream_client(&config)?;
+        let ms_http_client = {
+            let mut builder = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(
+                    config.modelscope.connect_timeout_secs,
+                ))
+                .timeout(std::time::Duration::from_secs(
+                    config.modelscope.timeout_secs,
+                ));
+            if let Some(ref proxy) = config.modelscope.proxy {
+                builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+            }
+            builder.build()?
+        };
+        let ms_head_client = {
+            let mut builder = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(
+                    config.modelscope.connect_timeout_secs,
+                ))
+                .timeout(std::time::Duration::from_secs(
+                    config.modelscope.timeout_secs,
+                ))
+                .redirect(reqwest::redirect::Policy::none());
+            if let Some(ref proxy) = config.modelscope.proxy {
+                builder = builder.proxy(reqwest::Proxy::all(proxy)?);
+            }
+            builder.build()?
+        };
         let service = CacheService::new(
             metadata,
             backend,
@@ -83,7 +110,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
 
-            Command::Info { name } => match service.info(&name).await? {
+            Command::Info { name } => match service.info(&name, "hf").await? {
                 Some(f) => {
                     println!("Name:          {}", f.name);
                     println!("Repo:          {}", f.repo);
@@ -127,7 +154,7 @@ fn main() -> anyhow::Result<()> {
             }
 
             Command::Serve => {
-                server::run(config, service).await?;
+                server::run(config, service, ms_http_client, ms_head_client).await?;
             }
         }
 

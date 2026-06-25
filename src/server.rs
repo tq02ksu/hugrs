@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::hf;
 use crate::service::CacheService;
 use axum::{
-    extract::{OriginalUri, Path, Request, State},
+    extract::{OriginalUri, Path, Query, Request, State},
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -10,10 +10,16 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
+pub async fn run(
+    config: Config,
+    service: CacheService,
+    ms_http_client: reqwest::Client,
+    ms_head_client: reqwest::Client,
+) -> anyhow::Result<()> {
     let http_client = hf::build_client(&config)?;
     let head_client = hf::build_head_client(&config)?;
     let app_state = AppState {
@@ -21,6 +27,8 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
         config: Arc::new(config),
         http_client: Arc::new(http_client),
         head_client: Arc::new(head_client),
+        ms_http_client: Arc::new(ms_http_client),
+        ms_head_client: Arc::new(ms_head_client),
     };
 
     let addr = format!(
@@ -31,25 +39,64 @@ pub async fn run(config: Config, service: CacheService) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(root))
         .route("/api/whoami-v2", get(whoami))
+        // Legacy unprefixed HF routes (backward compat)
         .route(
             "/api/models/{org}/{repo}",
-            get(handle_api_proxy_simple).head(handle_api_proxy_simple),
+            get(hf_model_info_simple).head(hf_model_info_simple),
         )
         .route(
             "/api/models/{org}/{repo}/revision/{revision}",
-            get(handle_api_proxy).head(handle_api_proxy),
+            get(hf_model_info).head(hf_model_info),
         )
         .route(
             "/api/models/{org}/{repo}/{*suffix}",
-            get(handle_api_proxy_suffix),
+            get(hf_model_api_suffix),
         )
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
-            get(handle_file_proxy).head(handle_file_proxy),
+            get(hf_file_proxy).head(hf_file_proxy),
         )
         .route(
             "/api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{*path}",
-            get(handle_file_proxy).head(handle_file_proxy),
+            get(hf_file_proxy).head(hf_file_proxy),
+        )
+        // New /hf/ prefix routes
+        .route(
+            "/hf/api/models/{org}/{repo}",
+            get(hf_model_info_simple).head(hf_model_info_simple),
+        )
+        .route(
+            "/hf/api/models/{org}/{repo}/revision/{revision}",
+            get(hf_model_info).head(hf_model_info),
+        )
+        .route(
+            "/hf/api/models/{org}/{repo}/{*suffix}",
+            get(hf_model_api_suffix),
+        )
+        .route(
+            "/hf/{org}/{repo}/resolve/{revision}/{*path}",
+            get(hf_file_proxy).head(hf_file_proxy),
+        )
+        // New /ms/ prefix routes
+        .route(
+            "/ms/api/v1/models/{org}/{repo}",
+            get(ms_model_info_simple).head(ms_model_info_simple),
+        )
+        .route(
+            "/ms/api/v1/models/{org}/{repo}/revision/{revision}",
+            get(ms_model_info).head(ms_model_info),
+        )
+        .route(
+            "/ms/api/v1/models/{org}/{repo}/{*suffix}",
+            get(ms_model_api_suffix),
+        )
+        .route(
+            "/ms/api/v1/models/{org}/{repo}/repo",
+            get(ms_repo_file_proxy).head(ms_repo_file_proxy),
+        )
+        .route(
+            "/ms/{org}/{repo}/resolve/{revision}/{*path}",
+            get(ms_file_proxy).head(ms_file_proxy),
         )
         .route("/api/stats", get(stats))
         .route("/api/agent-harnesses", get(agent_harnesses))
@@ -68,6 +115,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub http_client: Arc<reqwest::Client>,
     pub head_client: Arc<reqwest::Client>,
+    pub ms_http_client: Arc<reqwest::Client>,
+    pub ms_head_client: Arc<reqwest::Client>,
 }
 
 #[derive(Serialize)]
@@ -94,11 +143,30 @@ async fn log_request(req: Request, next: Next) -> Response {
     resp
 }
 
+fn hub_config<'a>(
+    state: &'a AppState,
+    source: &str,
+) -> (&'a str, &'a reqwest::Client, &'a reqwest::Client) {
+    match source {
+        "ms" => (
+            &state.config.modelscope.endpoint,
+            &state.ms_http_client,
+            &state.ms_head_client,
+        ),
+        _ => (
+            &state.config.huggingface.endpoint,
+            &state.http_client,
+            &state.head_client,
+        ),
+    }
+}
+
 async fn root(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(serde_json::json!({
         "service": "hugrs",
         "version": env!("CARGO_PKG_VERSION"),
         "hf_endpoint": state.config.huggingface.endpoint,
+        "ms_endpoint": state.config.modelscope.endpoint,
     })))
 }
 
@@ -109,38 +177,53 @@ async fn whoami() -> Result<Json<serde_json::Value>, AppError> {
     })))
 }
 
-async fn handle_api_proxy_simple(
+// ── Model info handlers (source-aware) ──
+
+async fn hf_model_info_simple(
     State(state): State<AppState>,
     Path((org, repo)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    proxy_model_info(state, org, repo, "main".to_string()).await
+    model_info_inner(state, "hf", org, repo, "main".to_string()).await
 }
 
-async fn handle_api_proxy(
+async fn hf_model_info(
     State(state): State<AppState>,
     Path((org, repo, revision)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
-    proxy_model_info(state, org, repo, revision).await
+    model_info_inner(state, "hf", org, repo, revision).await
 }
 
-pub async fn handle_api_proxy_suffix(
+async fn ms_model_info_simple(
     State(state): State<AppState>,
-    OriginalUri(uri): OriginalUri,
-    Path((org, repo, suffix)): Path<(String, String, String)>,
+    Path((org, repo)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    proxy_model_api_path(state, org, repo, &suffix, uri.query()).await
+    model_info_inner(state, "ms", org, repo, "main".to_string()).await
 }
 
-async fn proxy_model_info(
+async fn ms_model_info(
+    State(state): State<AppState>,
+    Path((org, repo, revision)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    model_info_inner(state, "ms", org, repo, revision).await
+}
+
+async fn model_info_inner(
     state: AppState,
+    source: &str,
     org: String,
     repo: String,
     revision: String,
 ) -> Result<Response, AppError> {
+    let (endpoint, client, _head) = hub_config(&state, source);
     let repo_id = format!("{}/{}", org, repo);
+    let api_prefix = if source == "ms" {
+        "api/v1/models"
+    } else {
+        "api/models"
+    };
     let url = format!(
-        "{}/api/models/{}/revision/{}",
-        state.config.huggingface.endpoint, repo_id, revision
+        "{}/{}/{}/revision/{}",
+        endpoint, api_prefix, repo_id, revision
     );
 
     {
@@ -164,8 +247,12 @@ async fn proxy_model_info(
     }
 
     tracing::info!("model_info proxy to: {}", url);
-    let mut req = state.http_client.get(&url);
-    if let Some(ref token) = state.config.huggingface.token {
+    let mut req = client.get(&url);
+    let token = match source {
+        "ms" => &state.config.modelscope.token,
+        _ => &state.config.huggingface.token,
+    };
+    if let Some(ref token) = token {
         req = req.header("Authorization", format!("Bearer {}", token));
     }
     let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
@@ -203,43 +290,143 @@ async fn proxy_model_info(
         .map_err(|e| AppError::Anyhow(e.into()))
 }
 
-async fn proxy_model_api_path(
-    state: AppState,
-    org: String,
-    repo: String,
-    suffix: &str,
-    query: Option<&str>,
-) -> Result<Response, AppError> {
-    let repo_id = format!("{}/{}", org, repo);
-    let mut url = format!(
-        "{}/api/models/{}/{}",
-        state.config.huggingface.endpoint, repo_id, suffix
-    );
-    if let Some(query) = query {
-        url.push('?');
-        url.push_str(query);
-    }
+// ── Model API path handlers (source-aware) ──
 
-    proxy_json(&state, &url).await
+pub async fn hf_model_api_suffix(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    Path((org, repo, suffix)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    model_api_path_inner(
+        state,
+        "hf",
+        org,
+        repo,
+        suffix,
+        uri.query().map(|s| s.to_string()),
+    )
+    .await
 }
 
-pub async fn handle_file_proxy(
+async fn ms_model_api_suffix(
+    State(state): State<AppState>,
+    OriginalUri(uri): OriginalUri,
+    Path((org, repo, suffix)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    model_api_path_inner(
+        state,
+        "ms",
+        org,
+        repo,
+        suffix,
+        uri.query().map(|s| s.to_string()),
+    )
+    .await
+}
+
+async fn model_api_path_inner(
+    state: AppState,
+    source: &str,
+    org: String,
+    repo: String,
+    suffix: String,
+    query: Option<String>,
+) -> Result<Response, AppError> {
+    let (endpoint, _client, _head) = hub_config(&state, source);
+    let repo_id = format!("{}/{}", org, repo);
+    let api_prefix = if source == "ms" {
+        "api/v1/models"
+    } else {
+        "api/models"
+    };
+    let mut url = format!("{}/{}/{}/{}", endpoint, api_prefix, repo_id, suffix);
+    if let Some(query) = query {
+        url.push('?');
+        url.push_str(&query);
+    }
+
+    proxy_json(&state, source, &url).await
+}
+
+// ── File proxy handler (reused by HF and MS) ──
+
+pub async fn hf_file_proxy(
     State(state): State<AppState>,
     method: Method,
     headers: HeaderMap,
     Path((org, repo, revision, path)): Path<(String, String, String, String)>,
 ) -> Result<Response, AppError> {
+    let (endpoint, _, _) = hub_config(&state, "hf");
     let repo_id = format!("{}/{}", org, repo);
     let cache_name = format!("{}/{}", repo_id, path);
-    let range = parse_range(&headers);
+    let url = format!("{}/{}/resolve/{}/{}", endpoint, repo_id, revision, path);
+    let user_agent = forwarded_user_agent(&headers);
+    file_proxy_inner(state, "hf", url, cache_name, method, headers, path, user_agent, false).await
+}
+
+pub async fn ms_file_proxy(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Path((org, repo, revision, path)): Path<(String, String, String, String)>,
+) -> Result<Response, AppError> {
+    let (endpoint, _, _) = hub_config(&state, "ms");
+    let repo_id = format!("{}/{}", org, repo);
+    let cache_name = format!("{}/{}", repo_id, path);
+    let url = format!("{}/{}/resolve/{}/{}", endpoint, repo_id, revision, path);
+    let user_agent = forwarded_user_agent(&headers);
+    file_proxy_inner(state, "ms", url, cache_name, method, headers, path, user_agent, false).await
+}
+
+pub async fn ms_repo_file_proxy(
+    State(state): State<AppState>,
+    method: Method,
+    headers: HeaderMap,
+    Path((org, repo)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let revision = params
+        .get("Revision")
+        .cloned()
+        .unwrap_or_else(|| "master".to_string());
+    let file_path = params.get("FilePath").cloned().unwrap_or_default();
+    let (endpoint, _, _) = hub_config(&state, "ms");
+    let cache_name = format!("{}/{}/{}", org, repo, file_path);
     let url = format!(
-        "{}/{}/resolve/{}/{}",
-        state.config.huggingface.endpoint, repo_id, revision, path
+        "{}/api/v1/models/{}/{}/repo?Revision={}&FilePath={}",
+        endpoint, org, repo, revision, file_path
     );
+
+    let user_agent = forwarded_user_agent(&headers);
+    file_proxy_inner(state, "ms", url, cache_name, method, headers, file_path, user_agent, true)
+        .await
+}
+
+async fn file_proxy_inner(
+    state: AppState,
+    source: &str,
+    url: String,
+    cache_name: String,
+    method: Method,
+    headers: HeaderMap,
+    path: String,
+    user_agent: Option<String>,
+    first_hop_get: bool,
+) -> Result<Response, AppError> {
+    let (_endpoint, http_client, head_client) = hub_config(&state, source);
+    let repo_id = {
+        let parts: Vec<&str> = cache_name.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            format!("{}/{}", parts[0], parts[1])
+        } else {
+            String::new()
+        }
+    };
+    let range = parse_range(&headers);
 
     if method == Method::HEAD {
         let service = state.service.lock().await;
-        if let Ok(Some(file)) = service.info(&cache_name).await {
+        if let Ok(Some(file)) = service.info(&cache_name, source).await {
             if file.x_repo_commit.is_some() {
                 tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
                 return build_head_response(&file, &path);
@@ -252,12 +439,15 @@ pub async fn handle_file_proxy(
         drop(service);
 
         tracing::info!("HEAD proxy to upstream: {}", url);
-        let resp = state
-            .head_client
-            .head(&url)
-            .send()
-            .await
-            .map_err(|e| AppError::Anyhow(e.into()))?;
+        let mut req = if first_hop_get {
+            head_client.get(&url)
+        } else {
+            head_client.head(&url)
+        };
+        if let Some(ref ua) = user_agent {
+            req = req.header("User-Agent", ua);
+        }
+        let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
         let status = resp.status();
         let first_headers = resp.headers();
 
@@ -283,7 +473,11 @@ pub async fn handle_file_proxy(
                 .unwrap_or("");
             let location = resolve_redirect(&url, location);
             tracing::info!("HEAD following redirect: {}", location);
-            match state.http_client.head(location).send().await {
+            let mut req2 = http_client.head(location);
+            if let Some(ref ua) = user_agent {
+                req2 = req2.header("User-Agent", ua);
+            }
+            match req2.send().await {
                 Ok(resp2) => {
                     let h = resp2.headers();
                     let cl: u64 = h
@@ -334,6 +528,7 @@ pub async fn handle_file_proxy(
             let _ = service.ensure_file_headers(
                 &cache_name,
                 &repo_id,
+                source,
                 size,
                 etag.as_deref(),
                 x_repo_commit.as_deref(),
@@ -374,10 +569,19 @@ pub async fn handle_file_proxy(
     let get_start = std::time::Instant::now();
     {
         let service = state.service.lock().await;
-        if service.is_file_complete(&cache_name).await.unwrap_or(false) {
+        if service
+            .is_file_complete(&cache_name, source)
+            .await
+            .unwrap_or(false)
+        {
             tracing::debug!("GET cache hit (streaming): {}", cache_name);
             let (file, content_length, stream) = service
-                .stream_cached_file(&cache_name, range.map(|r| r.0), range.and_then(|r| r.1))
+                .stream_cached_file(
+                    &cache_name,
+                    source,
+                    range.map(|r| r.0),
+                    range.and_then(|r| r.1),
+                )
                 .await?;
             tracing::info!(
                 "{}: cache hit, stream ready in {}ms",
@@ -395,8 +599,10 @@ pub async fn handle_file_proxy(
             &url,
             &cache_name,
             &repo_id,
+            source,
             range.map(|r| r.0),
             range.and_then(|r| r.1),
+            user_agent.as_deref(),
         )
         .await?;
     drop(service);
@@ -452,11 +658,9 @@ pub fn resolve_redirect(base_url: &str, location: &str) -> String {
     if location.is_empty() {
         return base_url.to_string();
     }
-    // Absolute URL
     if location.contains("://") {
         return location.to_string();
     }
-    // Absolute path
     if location.starts_with('/') {
         if let Some(pos) = base_url.find("://") {
             let scheme_end = base_url[pos + 3..].find('/').map(|p| pos + 3 + p);
@@ -467,7 +671,6 @@ pub fn resolve_redirect(base_url: &str, location: &str) -> String {
         }
         return format!("{}{}", base_url, location);
     }
-    // Relative path: resolve against the directory of the base URL
     let base_dir = match base_url.rfind('/') {
         Some(pos) if pos > base_url.find("://").map(|p| p + 3).unwrap_or(0) => &base_url[..pos],
         _ => base_url,
@@ -491,6 +694,13 @@ fn parse_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
         }
     }
     Some((start, end))
+}
+
+fn forwarded_user_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
 }
 
 fn build_stream_response(
@@ -560,12 +770,17 @@ async fn stats(State(state): State<AppState>) -> Result<Json<crate::metadata::St
 
 async fn agent_harnesses(State(state): State<AppState>) -> Result<Response, AppError> {
     let url = format!("{}/api/agent-harnesses", state.config.huggingface.endpoint);
-    proxy_json(&state, &url).await
+    proxy_json(&state, "hf", &url).await
 }
 
-async fn proxy_json(state: &AppState, url: &str) -> Result<Response, AppError> {
-    let mut req = state.http_client.get(url);
-    if let Some(ref token) = state.config.huggingface.token {
+async fn proxy_json(state: &AppState, source: &str, url: &str) -> Result<Response, AppError> {
+    let (_, client, _) = hub_config(state, source);
+    let mut req = client.get(url);
+    let token = match source {
+        "ms" => &state.config.modelscope.token,
+        _ => &state.config.huggingface.token,
+    };
+    if let Some(ref token) = token {
         req = req.header("Authorization", format!("Bearer {}", token));
     }
     let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;

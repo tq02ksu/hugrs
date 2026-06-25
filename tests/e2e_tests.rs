@@ -22,9 +22,20 @@ use hugrs::service::CHUNK_SIZE;
 struct MockState {
     data: Arc<Vec<u8>>,
     get_count: Arc<AtomicU32>,
+    ms_repo_get_count: Arc<AtomicU32>,
+    ms_cdn_get_count: Arc<AtomicU32>,
+    user_agents: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
-async fn mock_head(State(s): State<MockState>) -> Response {
+fn record_user_agent(state: &MockState, headers: &HeaderMap) {
+    if let Some(ua) = headers.get("user-agent").and_then(|v| v.to_str().ok()) {
+        state.user_agents.lock().unwrap().push(ua.to_string());
+    }
+}
+
+async fn mock_head(State(s): State<MockState>, headers: HeaderMap) -> Response {
+    record_user_agent(&s, &headers);
+
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Length", s.data.len())
@@ -40,6 +51,7 @@ async fn mock_get(
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
     s.get_count.fetch_add(1, Ordering::SeqCst);
+    record_user_agent(&s, &headers);
     let total = s.data.len() as u64;
     let (start, end) = if let Some(range) = headers.get("range") {
         let r = range.to_str().unwrap().strip_prefix("bytes=").unwrap();
@@ -66,6 +78,79 @@ async fn mock_get(
         .unwrap())
 }
 
+async fn mock_ms_repo_head(State(s): State<MockState>, headers: HeaderMap) -> Response {
+    record_user_agent(&s, &headers);
+
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("Content-Length", 311)
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+async fn mock_ms_repo_get(State(s): State<MockState>, headers: HeaderMap) -> Response {
+    s.ms_repo_get_count.fetch_add(1, Ordering::SeqCst);
+    record_user_agent(&s, &headers);
+
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header("Location", "/cdn/model.safetensors")
+        .header("X-Linked-ETag", "mock-linked-etag")
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+async fn mock_ms_cdn_head(State(s): State<MockState>, headers: HeaderMap) -> Response {
+    record_user_agent(&s, &headers);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Length", s.data.len())
+        .header("ETag", "\"mock-ms-etag\"")
+        .header("Content-Type", "application/octet-stream")
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+async fn mock_ms_cdn_get(
+    State(s): State<MockState>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
+    s.ms_cdn_get_count.fetch_add(1, Ordering::SeqCst);
+    record_user_agent(&s, &headers);
+
+    let total = s.data.len() as u64;
+    let (start, end, status) = if let Some(range) = headers.get("range") {
+        let r = range.to_str().unwrap().strip_prefix("bytes=").unwrap();
+        let (a, b) = r.split_once('-').unwrap();
+        let a: u64 = a.parse().unwrap();
+        let b: u64 = if b.is_empty() {
+            total - 1
+        } else {
+            b.parse().unwrap()
+        };
+        (a, b, StatusCode::PARTIAL_CONTENT)
+    } else {
+        (0u64, total - 1, StatusCode::OK)
+    };
+
+    let slice = &s.data[start as usize..=end as usize];
+    let mut builder = Response::builder()
+        .status(status)
+        .header("Content-Length", slice.len())
+        .header("ETag", "\"mock-ms-etag\"")
+        .header("Content-Type", "application/octet-stream");
+
+    if status == StatusCode::PARTIAL_CONTENT {
+        builder = builder.header(
+            "Content-Range",
+            format!("bytes {}-{}/{}", start, end, total),
+        );
+    }
+
+    Ok(builder.body(axum::body::Body::from(slice.to_vec())).unwrap())
+}
+
 async fn mock_model_api_proxy(req: axum::extract::Request) -> Response {
     let uri = req.uri();
     let body = serde_json::to_vec(&json!({
@@ -85,6 +170,9 @@ async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
     let state = MockState {
         data: Arc::new(data),
         get_count: Arc::new(AtomicU32::new(0)),
+        ms_repo_get_count: Arc::new(AtomicU32::new(0)),
+        ms_cdn_get_count: Arc::new(AtomicU32::new(0)),
+        user_agents: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let app = Router::new()
         .route(
@@ -95,6 +183,28 @@ async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
             "/api/models/{org}/{repo}/{*path}",
             get(mock_model_api_proxy),
         )
+        .with_state(state.clone());
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async { axum::serve(l, app).await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    (addr, state)
+}
+
+async fn start_ms_upstream(data: Vec<u8>) -> (String, MockState) {
+    let state = MockState {
+        data: Arc::new(data),
+        get_count: Arc::new(AtomicU32::new(0)),
+        ms_repo_get_count: Arc::new(AtomicU32::new(0)),
+        ms_cdn_get_count: Arc::new(AtomicU32::new(0)),
+        user_agents: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let app = Router::new()
+        .route(
+            "/api/v1/models/{org}/{repo}/repo",
+            head(mock_ms_repo_head).get(mock_ms_repo_get),
+        )
+        .route("/cdn/{*path}", head(mock_ms_cdn_head).get(mock_ms_cdn_get))
         .with_state(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", l.local_addr().unwrap());
@@ -135,7 +245,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
 
     let service = make_service(dir, "http_db");
 
-    let config = hugrs::config::Config {
+    let mut config = hugrs::config::Config {
         server: hugrs::config::ServerConfig {
             host: "127.0.0.1".into(),
             port: 3000,
@@ -163,7 +273,9 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
             timeout_secs: 120,
             connect_timeout_secs: 15,
         },
+        modelscope: hugrs::config::MsConfig::default(),
     };
+    config.modelscope.endpoint = upstream.to_string();
 
     let http_client = Arc::new(reqwest::Client::new());
     let head_client = Arc::new(
@@ -176,18 +288,29 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
     let state = hugrs::server::AppState {
         service: Arc::new(TokioMutex::new(service)),
         config: Arc::new(config),
-        http_client,
+        http_client: http_client.clone(),
         head_client,
+        ms_http_client: http_client,
+        ms_head_client: Arc::new(
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        ),
     };
 
     Router::new()
         .route(
             "/api/models/{org}/{repo}/{*suffix}",
-            get(hugrs::server::handle_api_proxy_suffix),
+            get(hugrs::server::hf_model_api_suffix),
         )
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
-            get(hugrs::server::handle_file_proxy).head(hugrs::server::handle_file_proxy),
+            get(hugrs::server::hf_file_proxy).head(hugrs::server::hf_file_proxy),
+        )
+        .route(
+            "/ms/api/v1/models/{org}/{repo}/repo",
+            get(hugrs::server::ms_repo_file_proxy).head(hugrs::server::ms_repo_file_proxy),
         )
         .with_state(state)
 }
@@ -203,7 +326,7 @@ async fn test_small_file_bytes_match_upstream() {
     let service = make_service(&dir, "small.db");
     let url = format!("{}/org/repo/resolve/main/cfg.json", upstream);
     let (_, _, stream) = service
-        .stream_from_upstream(&url, "cfg.json", "org/repo", None, None)
+        .stream_from_upstream(&url, "cfg.json", "org/repo", "hf", None, None, None)
         .await
         .unwrap();
     use futures_util::StreamExt;
@@ -258,7 +381,7 @@ async fn test_large_file_bytes_match_upstream() {
     let service = make_service(&dir, "large.db");
     let url = format!("{}/org/repo/resolve/main/big.bin", upstream);
     let (_, _, stream) = service
-        .stream_from_upstream(&url, "big.bin", "org/repo", None, None)
+        .stream_from_upstream(&url, "big.bin", "org/repo", "hf", None, None, None)
         .await
         .unwrap();
     use futures_util::StreamExt;
@@ -273,6 +396,84 @@ async fn test_large_file_bytes_match_upstream() {
 }
 
 #[tokio::test]
+async fn test_file_proxy_forwards_inbound_user_agent() {
+    let test_data: Vec<u8> = b"hello from upstream".to_vec();
+    let (upstream, state) = start_upstream(test_data).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let head_req = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/cfg.json")
+        .header("User-Agent", "ua-forward-test/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let head_resp = app.clone().oneshot(head_req).await.unwrap();
+    assert!(head_resp.status().is_success());
+
+    let get_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/org/repo/resolve/main/cfg.json")
+        .header("User-Agent", "ua-forward-test/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let get_resp = app.clone().oneshot(get_req).await.unwrap();
+    assert!(get_resp.status().is_success());
+
+    let seen = state.user_agents.lock().unwrap().clone();
+    assert!(seen.iter().any(|ua| ua == "ua-forward-test/1.0"));
+}
+
+#[tokio::test]
+async fn test_chunk_downloads_forward_inbound_user_agent() {
+    let test_data = vec![7u8; CHUNK_SIZE + 128];
+    let (upstream, state) = start_upstream(test_data).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let get_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/org/repo/resolve/main/big.bin")
+        .header("User-Agent", "ua-range-test/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let get_resp = app.oneshot(get_req).await.unwrap();
+    assert!(get_resp.status().is_success());
+
+    let _body = axum::body::to_bytes(get_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let seen = state.user_agents.lock().unwrap().clone();
+    assert!(seen.iter().any(|ua| ua == "ua-range-test/1.0"));
+}
+
+#[tokio::test]
+async fn test_file_proxy_does_not_invent_user_agent() {
+    let test_data: Vec<u8> = b"no ua request".to_vec();
+    let (upstream, state) = start_upstream(test_data).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let get_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/org/repo/resolve/main/no-ua.bin")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let get_resp = app.oneshot(get_req).await.unwrap();
+    assert!(get_resp.status().is_success());
+
+    let seen = state.user_agents.lock().unwrap().clone();
+    assert!(seen.is_empty());
+}
+
+#[tokio::test]
 async fn test_second_get_uses_cache_and_matches() {
     let test_data: Vec<u8> = (0..(CHUNK_SIZE as u64 * 2 + 500) as u8)
         .map(|i| (i.wrapping_mul(17).wrapping_add(31)) as u8)
@@ -283,7 +484,7 @@ async fn test_second_get_uses_cache_and_matches() {
     let url = format!("{}/org/repo/resolve/main/big.bin", upstream);
     let n = "big.bin";
     let (_, _, s1) = service
-        .stream_from_upstream(&url, n, "org/repo", None, None)
+        .stream_from_upstream(&url, n, "org/repo", "hf", None, None, None)
         .await
         .unwrap();
     use futures_util::StreamExt;
@@ -293,7 +494,7 @@ async fn test_second_get_uses_cache_and_matches() {
     }
     let first = s.get_count.load(Ordering::SeqCst);
     let (_, _, s2) = service
-        .stream_from_upstream(&url, n, "org/repo", None, None)
+        .stream_from_upstream(&url, n, "org/repo", "hf", None, None, None)
         .await
         .unwrap();
     let mut got = Vec::new();
@@ -331,4 +532,84 @@ async fn test_generic_model_api_proxy_forwards_suffix_and_query() {
         json!("/api/models/Qwen/Qwen3-Reranker-8B/tree/main")
     );
     assert_eq!(body["query"], json!("recursive=true&expand=false"));
+}
+
+#[tokio::test]
+async fn test_ms_repo_second_get_uses_cache() {
+    let test_data = b"modelscope cached body".to_vec();
+    let (upstream, state) = start_ms_upstream(test_data.clone()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let uri = "/ms/api/v1/models/Qwen/Qwen3-Embedding-0.6B/repo?Revision=master&FilePath=model.safetensors";
+
+    let req1 = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("User-Agent", "ua-ms-cache-test/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp1 = app.clone().oneshot(req1).await.unwrap();
+    assert!(resp1.status().is_success());
+    let body1 = axum::body::to_bytes(resp1.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    assert_eq!(body1.as_ref(), test_data.as_slice());
+
+    let first_repo_gets = state.ms_repo_get_count.load(Ordering::SeqCst);
+    let first_cdn_gets = state.ms_cdn_get_count.load(Ordering::SeqCst);
+    assert!(first_repo_gets > 0);
+    assert!(first_cdn_gets > 0);
+
+    let req2 = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("User-Agent", "ua-ms-cache-test/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp2 = app.oneshot(req2).await.unwrap();
+    assert!(resp2.status().is_success());
+    let body2 = axum::body::to_bytes(resp2.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    assert_eq!(body2.as_ref(), test_data.as_slice());
+
+    assert_eq!(first_repo_gets, state.ms_repo_get_count.load(Ordering::SeqCst));
+    assert_eq!(first_cdn_gets, state.ms_cdn_get_count.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn test_ms_repo_stale_small_cache_refreshes_on_valid_range() {
+    let test_data = vec![9u8; CHUNK_SIZE + 1024];
+    let (upstream, state) = start_ms_upstream(test_data.clone()).await;
+    let dir = TempDir::new().unwrap();
+
+    let seed_service = make_service(&dir, "http_db");
+    seed_service
+        .upload(
+            "Qwen/Qwen3-Embedding-0.6B/model.safetensors",
+            "Qwen/Qwen3-Embedding-0.6B",
+            "ms",
+            vec![1u8; 10],
+        )
+        .await
+        .unwrap();
+
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let uri = "/ms/api/v1/models/Qwen/Qwen3-Embedding-0.6B/repo?Revision=master&FilePath=model.safetensors";
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("Range", "bytes=100-199")
+        .header("User-Agent", "ua-ms-stale-cache-test/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
+    assert!(state.ms_repo_get_count.load(Ordering::SeqCst) > 0);
 }

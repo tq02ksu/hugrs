@@ -28,16 +28,16 @@ async fn test_upload_and_download() {
 
     let data = b"hello hugrs cache service";
     service
-        .upload("test.bin", "test-repo", data.to_vec())
+        .upload("test.bin", "test-repo", "hf", data.to_vec())
         .await
         .unwrap();
 
-    let file = service.info("test.bin").await.unwrap().unwrap();
+    let file = service.info("test.bin", "hf").await.unwrap().unwrap();
     assert_eq!(file.name, "test.bin");
     assert_eq!(file.repo, "test-repo");
     assert_eq!(file.total_size as usize, data.len());
 
-    let downloaded = service.download("test.bin").await.unwrap();
+    let downloaded = service.download("test.bin", "hf").await.unwrap();
     assert_eq!(downloaded, data);
 
     let files = service.list().await.unwrap();
@@ -66,13 +66,13 @@ async fn test_delete_and_gc() {
     );
 
     service
-        .upload("x.bin", "repo-a", vec![1, 2, 3])
+        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3])
         .await
         .unwrap();
-    assert!(service.info("x.bin").await.unwrap().is_some());
+    assert!(service.info("x.bin", "hf").await.unwrap().is_some());
 
-    service.delete("x.bin").await.unwrap();
-    assert!(service.info("x.bin").await.unwrap().is_none());
+    service.delete("x.bin", "hf").await.unwrap();
+    assert!(service.info("x.bin", "hf").await.unwrap().is_none());
 
     let count = service.gc().await.unwrap();
     assert!(count > 0);
@@ -103,7 +103,7 @@ async fn test_stats() {
     assert_eq!(stats.file_count, 0);
 
     service
-        .upload("f.bin", "test-repo", vec![5; 100])
+        .upload("f.bin", "test-repo", "hf", vec![5; 100])
         .await
         .unwrap();
 
@@ -134,15 +134,15 @@ async fn test_upload_duplicate_file_overwrites() {
     );
 
     service
-        .upload("dup.bin", "repo-a", vec![1, 2, 3])
+        .upload("dup.bin", "repo-a", "hf", vec![1, 2, 3])
         .await
         .unwrap();
     service
-        .upload("dup.bin", "repo-a", vec![4, 5, 6])
+        .upload("dup.bin", "repo-a", "hf", vec![4, 5, 6])
         .await
         .unwrap();
 
-    let downloaded = service.download("dup.bin").await.unwrap();
+    let downloaded = service.download("dup.bin", "hf").await.unwrap();
     assert_eq!(downloaded, vec![4, 5, 6]);
 }
 
@@ -168,11 +168,11 @@ async fn test_lru_eviction() {
     );
 
     service
-        .upload("big.bin", "repo-big", vec![0u8; 250])
+        .upload("big.bin", "repo-big", "hf", vec![0u8; 250])
         .await
         .unwrap();
     service
-        .upload("small.bin", "repo-small", vec![1u8; 100])
+        .upload("small.bin", "repo-small", "hf", vec![1u8; 100])
         .await
         .unwrap();
 
@@ -204,15 +204,15 @@ async fn test_lru_eviction_by_repo() {
     );
 
     service
-        .upload("a.txt", "repo-a", vec![1u8; 100])
+        .upload("a.txt", "repo-a", "hf", vec![1u8; 100])
         .await
         .unwrap();
     service
-        .upload("b.txt", "repo-a", vec![2u8; 100])
+        .upload("b.txt", "repo-a", "hf", vec![2u8; 100])
         .await
         .unwrap();
     service
-        .upload("c.txt", "repo-b", vec![3u8; 100])
+        .upload("c.txt", "repo-b", "hf", vec![3u8; 100])
         .await
         .unwrap();
 

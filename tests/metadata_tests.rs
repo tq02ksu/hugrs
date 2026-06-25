@@ -33,7 +33,7 @@ fn test_add_and_get_file() {
     assert_eq!(file.total_size, 1024);
     assert_eq!(file.source, "upload");
 
-    let got = store.get_file_by_name("model.bin").unwrap();
+    let got = store.get_file_by_name("model.bin", "upload").unwrap();
     assert!(got.is_some());
 }
 
@@ -69,7 +69,7 @@ fn test_unlink_and_gc() {
     let file = store.add_file("x.bin", "repo-z", 200, "upload").unwrap();
     store.link_file_trunk(file.id, "def456", 0, 200).unwrap();
 
-    store.delete_file("x.bin").unwrap();
+    store.delete_file("x.bin", "upload").unwrap();
 
     let orphans = store.get_orphan_trunks().unwrap();
     assert_eq!(orphans.len(), 1);
@@ -121,8 +121,8 @@ fn test_touch_repo() {
         .unwrap();
     store.touch_repo("test-repo").unwrap();
 
-    let f1 = store.get_file_by_name("f1.bin").unwrap().unwrap();
-    let f2 = store.get_file_by_name("f2.bin").unwrap().unwrap();
+    let f1 = store.get_file_by_name("f1.bin", "upload").unwrap().unwrap();
+    let f2 = store.get_file_by_name("f2.bin", "upload").unwrap().unwrap();
     assert!(!f1.last_accessed.is_empty());
     assert!(!f2.last_accessed.is_empty());
 }
@@ -156,4 +156,56 @@ fn test_delete_files_by_repo() {
     let files = store.list_files().unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0].name, "c.txt");
+}
+
+#[test]
+fn test_same_name_different_source() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    store.add_file("model.bin", "repo", 100, "hf").unwrap();
+    store.add_file("model.bin", "repo", 200, "ms").unwrap();
+
+    let hf = store.get_file_by_name("model.bin", "hf").unwrap().unwrap();
+    let ms = store.get_file_by_name("model.bin", "ms").unwrap().unwrap();
+
+    assert_eq!(hf.total_size, 100);
+    assert_eq!(ms.total_size, 200);
+    assert_ne!(hf.id, ms.id);
+}
+
+#[test]
+fn test_migration_from_old_unique_name_schema() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+
+    // Create old-style DB manually with UNIQUE(name)
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT NOT NULL UNIQUE,
+                repo          TEXT NOT NULL DEFAULT '',
+                total_size    INTEGER NOT NULL,
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
+                source        TEXT NOT NULL DEFAULT 'pull'
+            );
+            INSERT INTO files (name, repo, total_size, source) VALUES ('model.bin', 'repo', 100, 'pull');"
+        ).unwrap();
+    }
+
+    // Open with MetadataStore — should trigger migration
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    // Old row should now have source='hf' (migrated from 'pull')
+    let file = store.get_file_by_name("model.bin", "hf").unwrap().unwrap();
+    assert_eq!(file.total_size, 100);
+
+    // Should be able to add same name with different source now
+    store.add_file("model.bin", "repo", 200, "ms").unwrap();
+    let ms = store.get_file_by_name("model.bin", "ms").unwrap().unwrap();
+    assert_eq!(ms.total_size, 200);
 }

@@ -54,7 +54,7 @@ pub async fn pull_model(
         tracing::info!("Pulling {} from {}", sibling.rfilename, download_url);
 
         if let Err(e) = service
-            .download_from_url(&download_url, &sibling.rfilename, repo_id, 8)
+            .download_from_url(&download_url, &sibling.rfilename, repo_id, "hf", 8)
             .await
         {
             tracing::error!("Failed to pull {}: {}", sibling.rfilename, e);

@@ -76,6 +76,18 @@ hugrs --max-size 10737418240 serve
 | `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | `--hf-endpoint` | HF Hub URL, e.g. `https://hf-mirror.com` |
 | `token` | string | — | `HUGRS_HF_TOKEN` | `--hf-token` | HF API token for private/gated models |
 | `proxy` | string | — | `HUGRS_HF_PROXY` | `--hf-proxy` | HTTP proxy, e.g. `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_HF_TIMEOUT` | `--hf-timeout` | Request timeout in seconds |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_HF_CONNECT_TIMEOUT` | `--hf-connect-timeout` | Connect timeout in seconds |
+
+### `[modelscope]` — ModelScope Hub
+
+| Key | Type | Default | Env Var | CLI Flag | Description |
+|-----|------|---------|---------|----------|-------------|
+| `endpoint` | string | `"https://modelscope.cn"` | `HUGRS_MS_ENDPOINT` | `--ms-endpoint` | ModelScope Hub URL |
+| `token` | string | — | `HUGRS_MS_TOKEN` | `--ms-token` | ModelScope API token for private models |
+| `proxy` | string | — | `HUGRS_MS_PROXY` | `--ms-proxy` | HTTP proxy, e.g. `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_MS_TIMEOUT` | `--ms-timeout` | Request timeout in seconds |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_MS_CONNECT_TIMEOUT` | `--ms-connect-timeout` | Connect timeout in seconds |
 
 ---
 
@@ -98,6 +110,9 @@ port = 3000
 
 [huggingface]
 endpoint = "https://huggingface.co"
+
+[modelscope]
+endpoint = "https://modelscope.cn"
 ```
 
 ### Production (S3 + mirror + proxy + capacity limit)
@@ -121,6 +136,9 @@ port = 3000
 [huggingface]
 endpoint = "https://hf-mirror.com"
 proxy = "http://proxy.internal:8080"
+
+[modelscope]
+endpoint = "https://modelscope.cn"
 ```
 
 ### High-performance local cache
@@ -162,6 +180,10 @@ HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=8080
 HUGRS_HF_ENDPOINT=https://hf-mirror.com
 HUGRS_HF_PROXY=http://proxy:3128
+HUGRS_HF_TIMEOUT=60
+HUGRS_HF_CONNECT_TIMEOUT=15
+HUGRS_MS_ENDPOINT=https://modelscope.cn
+HUGRS_MS_PROXY=http://proxy:3128
 ```
 
 ---
@@ -192,6 +214,13 @@ Global Flags:
       --hf-endpoint <URL>      HF Hub URL
       --hf-token <TOKEN>       HF API token
       --hf-proxy <URL>         HTTP proxy
+      --hf-timeout <SECS>      HF request timeout
+      --hf-connect-timeout <SECS>  HF connect timeout
+      --ms-endpoint <URL>      ModelScope Hub URL
+      --ms-token <TOKEN>       ModelScope API token
+      --ms-proxy <URL>         ModelScope HTTP proxy
+      --ms-timeout <SECS>      ModelScope request timeout
+      --ms-connect-timeout <SECS>  ModelScope connect timeout
 
 Subcommands:
   upload     Upload a file
@@ -219,4 +248,9 @@ HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=3000
 HUGRS_HF_ENDPOINT=https://hf-mirror.com
 HUGRS_HF_PROXY=http://proxy:8080
+HUGRS_HF_TIMEOUT=60
+HUGRS_HF_CONNECT_TIMEOUT=15
+HUGRS_MS_ENDPOINT=https://modelscope.cn
+HUGRS_MS_TIMEOUT=60
+HUGRS_MS_CONNECT_TIMEOUT=15
 ```

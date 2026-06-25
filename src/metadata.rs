@@ -75,12 +75,13 @@ impl MetadataStore {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS files (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                name          TEXT NOT NULL UNIQUE,
+                name          TEXT NOT NULL,
                 repo          TEXT NOT NULL DEFAULT '',
                 total_size    INTEGER NOT NULL,
                 created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                 last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
-                source        TEXT NOT NULL
+                source        TEXT NOT NULL,
+                UNIQUE(name, source)
             );
 
             CREATE TABLE IF NOT EXISTS trunks (
@@ -146,6 +147,43 @@ impl MetadataStore {
         if !has_compressed_size {
             conn.execute_batch("ALTER TABLE trunks ADD COLUMN compressed_size INTEGER")?;
         }
+        // Migration: change UNIQUE(name) to UNIQUE(name, source) for ModelScope support
+        let needs_migration: bool = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='files'",
+                [],
+                |row| {
+                    let sql: String = row.get(0)?;
+                    Ok(!sql.contains("UNIQUE(name, source)"))
+                },
+            )
+            .unwrap_or(false);
+        if needs_migration {
+            conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS files_new;
+                CREATE TABLE files_new (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT NOT NULL,
+                    repo          TEXT NOT NULL DEFAULT '',
+                    total_size    INTEGER NOT NULL,
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
+                    source        TEXT NOT NULL DEFAULT 'hf',
+                    etag          TEXT,
+                    x_repo_commit TEXT,
+                    x_linked_size INTEGER,
+                    x_linked_etag TEXT,
+                    content_type  TEXT,
+                    UNIQUE(name, source)
+                );
+                INSERT INTO files_new (id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type)
+                    SELECT id, name, repo, total_size, created_at, last_accessed, CASE WHEN source IN ('pull', 'upload') THEN 'hf' ELSE source END, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files;
+                DROP TABLE files;
+                ALTER TABLE files_new RENAME TO files;"
+            )?;
+            conn.execute_batch("PRAGMA foreign_keys = ON")?;
+        }
         Ok(())
     }
 
@@ -178,12 +216,12 @@ impl MetadataStore {
         })
     }
 
-    pub fn get_file_by_name(&self, name: &str) -> anyhow::Result<Option<File>> {
+    pub fn get_file_by_name(&self, name: &str, source: &str) -> anyhow::Result<Option<File>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files WHERE name = ?1",
+            "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files WHERE name = ?1 AND source = ?2",
         )?;
-        let mut rows = stmt.query_map(params![name], |row| {
+        let mut rows = stmt.query_map(params![name, source], |row| {
             Ok(File {
                 id: row.get(0)?,
                 name: row.get(1)?,
@@ -202,9 +240,11 @@ impl MetadataStore {
         Ok(rows.next().transpose()?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_file_headers(
         &self,
         name: &str,
+        source: &str,
         etag: Option<&str>,
         x_repo_commit: Option<&str>,
         x_linked_size: Option<i64>,
@@ -213,8 +253,8 @@ impl MetadataStore {
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE files SET etag = ?1, x_repo_commit = ?2, x_linked_size = ?3, x_linked_etag = ?4, content_type = ?5 WHERE name = ?6",
-            params![etag, x_repo_commit, x_linked_size, x_linked_etag, content_type, name],
+            "UPDATE files SET etag = ?1, x_repo_commit = ?2, x_linked_size = ?3, x_linked_etag = ?4, content_type = ?5 WHERE name = ?6 AND source = ?7",
+            params![etag, x_repo_commit, x_linked_size, x_linked_etag, content_type, name, source],
         )?;
         Ok(())
     }
@@ -228,12 +268,12 @@ impl MetadataStore {
         Ok(())
     }
 
-    pub fn delete_file(&self, name: &str) -> anyhow::Result<bool> {
+    pub fn delete_file(&self, name: &str, source: &str) -> anyhow::Result<bool> {
         let conn = self.conn.lock().unwrap();
         let file_id: Option<i64> = conn
             .query_row(
-                "SELECT id FROM files WHERE name = ?1",
-                params![name],
+                "SELECT id FROM files WHERE name = ?1 AND source = ?2",
+                params![name, source],
                 |row| row.get(0),
             )
             .ok();

@@ -64,6 +64,21 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub hf_connect_timeout: Option<u64>,
 
+    #[arg(long, global = true)]
+    pub ms_endpoint: Option<String>,
+
+    #[arg(long, global = true)]
+    pub ms_token: Option<String>,
+
+    #[arg(long, global = true)]
+    pub ms_proxy: Option<String>,
+
+    #[arg(long, global = true)]
+    pub ms_timeout: Option<u64>,
+
+    #[arg(long, global = true)]
+    pub ms_connect_timeout: Option<u64>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -91,6 +106,11 @@ impl Cli {
             enable_sha256_verify: self.enable_sha256_verify,
             hf_timeout: self.hf_timeout,
             hf_connect_timeout: self.hf_connect_timeout,
+            ms_endpoint: self.ms_endpoint.clone(),
+            ms_token: self.ms_token.clone(),
+            ms_proxy: self.ms_proxy.clone(),
+            ms_timeout: self.ms_timeout,
+            ms_connect_timeout: self.ms_connect_timeout,
         }
     }
 }
