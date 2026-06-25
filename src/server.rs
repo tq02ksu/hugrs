@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::git;
 use crate::hf;
 use crate::service::CacheService;
 use axum::{
@@ -6,7 +7,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Serialize;
@@ -60,6 +61,19 @@ pub async fn run(
             "/api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{*path}",
             get(hf_file_proxy).head(hf_file_proxy),
         )
+        // Git/LFS proxy (legacy)
+        .route(
+            "/{org}/{repo}/info/refs",
+            get(git::git_info_refs),
+        )
+        .route(
+            "/{org}/{repo}/git-upload-pack",
+            post(git::git_upload_pack),
+        )
+        .route(
+            "/{org}/{repo}/info/lfs/objects/batch",
+            post(git::lfs_batch),
+        )
         // New /hf/ prefix routes
         .route(
             "/hf/api/models/{org}/{repo}",
@@ -76,6 +90,19 @@ pub async fn run(
         .route(
             "/hf/{org}/{repo}/resolve/{revision}/{*path}",
             get(hf_file_proxy).head(hf_file_proxy),
+        )
+        // Git/LFS proxy (/hf/)
+        .route(
+            "/hf/{org}/{repo}/info/refs",
+            get(git::git_info_refs),
+        )
+        .route(
+            "/hf/{org}/{repo}/git-upload-pack",
+            post(git::git_upload_pack),
+        )
+        .route(
+            "/hf/{org}/{repo}/info/lfs/objects/batch",
+            post(git::lfs_batch),
         )
         // New /ms/ prefix routes
         .route(
@@ -97,6 +124,19 @@ pub async fn run(
         .route(
             "/ms/{org}/{repo}/resolve/{revision}/{*path}",
             get(ms_file_proxy).head(ms_file_proxy),
+        )
+        // Git/LFS proxy (/ms/)
+        .route(
+            "/ms/{org}/{repo}/info/refs",
+            get(git::git_info_refs),
+        )
+        .route(
+            "/ms/{org}/{repo}/git-upload-pack",
+            post(git::git_upload_pack),
+        )
+        .route(
+            "/ms/{org}/{repo}/info/lfs/objects/batch",
+            post(git::lfs_batch),
         )
         .route("/api/stats", get(stats))
         .route("/api/agent-harnesses", get(agent_harnesses))
@@ -143,7 +183,7 @@ async fn log_request(req: Request, next: Next) -> Response {
     resp
 }
 
-fn hub_config<'a>(
+pub fn hub_config<'a>(
     state: &'a AppState,
     source: &str,
 ) -> (&'a str, &'a reqwest::Client, &'a reqwest::Client) {

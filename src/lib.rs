@@ -1,6 +1,7 @@
 pub mod chunker;
 pub mod cli;
 pub mod config;
+pub mod git;
 pub mod hf;
 pub mod metadata;
 pub mod server;
