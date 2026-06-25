@@ -1,25 +1,32 @@
 openapi: "3.0.3"
 info:
-  title: HugRS - HuggingFace Mirror API
+  title: HugRS API
   description: |
-    Single-service HuggingFace Hub mirror. All requests served from one
-    domain, no CDN redirects. Derived from actual nginx access logs of
-    `huggingface-cli download` (v1.16.1, hf_hub v1.16.1).
-  version: "0.1.1"
+    Transparent caching proxy for HuggingFace & ModelScope model files.
+    Proxy follows 30x redirects internally — clients always receive 200/206.
+  version: "0.2.0"
 
 servers:
   - url: http://127.0.0.1:3000
-    description: Default local server
+    description: Default
 
 tags:
-  - name: Mirror
-    description: Required by huggingface-cli / huggingface_hub SDK
+  - name: App
+    description: Application-level endpoints (health, stats)
+  - name: HuggingFace
+    description: HuggingFace Hub proxy (used by huggingface-cli, hfd.sh, huggingface_hub SDK)
+  - name: ModelScope
+    description: ModelScope Hub proxy (used by modelscope CLI/SDK)
 
 paths:
+  # ═══════════════════════════════════════════════════════════════════════
+  # App
+  # ═══════════════════════════════════════════════════════════════════════
+
   /:
     get:
-      tags: [Mirror]
-      summary: Health
+      tags: [App]
+      summary: Health check
       operationId: root
       responses:
         "200":
@@ -35,15 +42,47 @@ paths:
                     type: string
                   hf_endpoint:
                     type: string
+                  ms_endpoint:
+                    type: string
+
+  /api/stats:
+    get:
+      tags: [App]
+      summary: Cache statistics
+      operationId: stats
+      responses:
+        "200":
+          description: Cache statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+
+  /api/agent-harnesses:
+    get:
+      tags: [App]
+      summary: Agent harnesses (proxied from HF upstream)
+      operationId: agent_harnesses
+      responses:
+        "200":
+          description: Upstream JSON response
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # HuggingFace Hub
+  # ═══════════════════════════════════════════════════════════════════════
 
   /api/whoami-v2:
     get:
-      tags: [Mirror]
-      summary: Identity (CLI login check)
+      tags: [HuggingFace]
+      summary: Identity check (HF SDK login probe)
       operationId: whoami
       responses:
         "200":
-          description: Authenticated
+          description: Always reports as authenticated mirror
           content:
             application/json:
               schema:
@@ -54,248 +93,515 @@ paths:
                   auth:
                     type: boolean
 
-  /api/models/{org}/{repo}/revision/{revision}:
+  # ── Legacy unprefixed routes ──────────────────────────────────────────
+
+  /api/models/{org}/{repo}:
     parameters:
-      - name: org
-        in: path
-        required: true
-        schema:
-          type: string
-        example: Qwen
-      - name: repo
-        in: path
-        required: true
-        schema:
-          type: string
-        example: Qwen3.5-397B-A17B-FP8
-      - name: revision
-        in: path
-        required: true
-        schema:
-          type: string
-        example: main
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
     get:
-      tags: [Mirror]
-      summary: Repository metadata at revision
-      description: |
-        Returns model metadata including `siblings` array (file list)
-        and `sha` (commit hash). Called by `snapshot_download` to
-        discover files before downloading.
-      operationId: model_info_revision
+      tags: [HuggingFace]
+      summary: Model info @ main (legacy)
+      operationId: hf_model_info_simple
       responses:
         "200":
-          description: Model metadata
-          headers:
-            X-Repo-Commit:
-              schema:
-                type: string
-              description: Current commit SHA
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ModelInfo"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ModelInfo"
         "404":
           $ref: "#/components/responses/NotFound"
     head:
-      tags: [Mirror]
-      summary: Check revision existence
-      operationId: model_info_revision_head
+      tags: [HuggingFace]
+      summary: Check model existence @ main (legacy)
+      operationId: hf_model_info_simple_head
       responses:
         "200":
           description: OK
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /{org}/{repo}/resolve/{revision}/{path}:
+  /api/models/{org}/{repo}/revision/{revision}:
     parameters:
-      - name: org
-        in: path
-        required: true
-        schema:
-          type: string
-        example: Qwen
-      - name: repo
-        in: path
-        required: true
-        schema:
-          type: string
-        example: Qwen3.5-397B-A17B-FP8
-      - name: revision
-        in: path
-        required: true
-        schema:
-          type: string
-        description: Commit SHA (resolved from model info) or branch name
-        example: ea5b4f81096f3901c91dea97f81324302495781d
-      - name: path
-        in: path
-        required: true
-        schema:
-          type: string
-        description: File path within repo (wildcard)
-        example: model.safetensors-00001-of-00094.safetensors
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
     get:
-      tags: [Mirror]
-      summary: Download a file
+      tags: [HuggingFace]
+      summary: Model info at revision (legacy)
       description: |
-        Directly returns file content (no redirect). Serves from cache
-        if available, otherwise proxies from upstream and caches.
-        Supports Range for resumable downloads.
-      operationId: file_resolve
+        Returns model metadata including `siblings` array (file list).
+        Called by `snapshot_download` to discover files before downloading.
+      operationId: hf_model_info_revision
       responses:
         "200":
-          description: Full file content
-          headers:
-            Content-Length:
-              schema:
-                type: integer
-                format: int64
-            Content-Type:
-              schema:
-                type: string
-                example: application/octet-stream
-            ETag:
-              schema:
-                type: string
-            Accept-Ranges:
-              schema:
-                type: string
-                example: bytes
-            X-Repo-Commit:
-              schema:
-                type: string
+          $ref: "#/components/responses/ModelInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [HuggingFace]
+      summary: Check revision existence (legacy)
+      operationId: hf_model_info_revision_head
+      responses:
+        "200":
+          description: OK
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/models/{org}/{repo}/{*suffix}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: suffix
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Sub-path (e.g. tree/main, discussions)
+    get:
+      tags: [HuggingFace]
+      summary: Model API sub-path (legacy — tree, discussions, etc.)
+      operationId: hf_model_api_suffix
+      responses:
+        "200":
+          description: Proxied upstream response (usually JSON)
           content:
-            application/octet-stream:
+            application/json:
               schema:
-                type: string
-                format: binary
+                type: object
+
+  /{org}/{repo}/resolve/{revision}/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
+      - $ref: "#/components/parameters/FilePath"
+    get:
+      tags: [HuggingFace]
+      summary: Download file (legacy)
+      description: |
+        Returns file content (no redirect to client). Serves from cache if
+        available, otherwise proxies from upstream and caches.
+        Supports Range for resumable downloads. Compression is used.
+      operationId: hf_file_resolve
+      responses:
+        "200":
+          $ref: "#/components/responses/FileDownload"
         "206":
-          description: Partial content (Range)
-          headers:
-            Content-Range:
-              schema:
-                type: string
-            Content-Length:
-              schema:
-                type: integer
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
+          $ref: "#/components/responses/PartialFile"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
     head:
-      tags: [Mirror]
-      summary: Check file existence and metadata
+      tags: [HuggingFace]
+      summary: File metadata (legacy)
       description: |
-        Returns Content-Length, ETag, X-Repo-Commit headers without
-        transferring the body. CLI uses this to decide whether to
-        download or skip (based on ETag match).
-      operationId: file_resolve_head
+        Returns Content-Length, ETag, X-Repo-Commit without body.
+        CLI uses this to decide download vs. skip (ETag match).
+      operationId: hf_file_resolve_head
       responses:
         "200":
-          description: File metadata headers
-          headers:
-            Content-Length:
-              schema:
-                type: integer
-                format: int64
-            ETag:
-              schema:
-                type: string
-            Accept-Ranges:
-              schema:
-                type: string
-            X-Repo-Commit:
-              schema:
-                type: string
+          $ref: "#/components/responses/FileMetadata"
         "404":
           $ref: "#/components/responses/NotFound"
 
   /api/resolve-cache/{repo_type}/{org}/{repo}/{revision}/{path}:
     parameters:
-      - name: repo_type
-        in: path
-        required: true
-        schema:
-          type: string
-          enum: [models, datasets, spaces]
-        example: models
-      - name: org
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: repo
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: revision
-        in: path
-        required: true
-        schema:
-          type: string
-      - name: path
-        in: path
-        required: true
-        schema:
-          type: string
-    head:
-      tags: [Mirror]
-      summary: Check if file is cached (resolve-cache)
-      description: |
-        HuggingFace Hub internal endpoint for checking cache state.
-        CLI calls this after a HEAD to the resolve URL to determine
-        if the file is already cached locally.
-      operationId: resolve_cache_head
+      - $ref: "#/components/parameters/RepoType"
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
+      - $ref: "#/components/parameters/FilePath"
+    get:
+      tags: [HuggingFace]
+      summary: Get cached file (resolve-cache internal)
+      operationId: hf_resolve_cache_get
       responses:
         "200":
-          description: File is cached
-          headers:
-            Content-Length:
-              schema:
-                type: integer
-            ETag:
-              schema:
-                type: string
+          $ref: "#/components/responses/FileDownload"
         "404":
           description: Not cached
-    get:
-      tags: [Mirror]
-      summary: Get cached file (resolve-cache)
-      operationId: resolve_cache_get
+    head:
+      tags: [HuggingFace]
+      summary: Check cache state (resolve-cache internal)
+      description: |
+        HF SDK calls this after HEAD to determine if file is already cached.
+      operationId: hf_resolve_cache_head
       responses:
         "200":
-          description: File content from cache
-          headers:
-            Content-Length:
-              schema:
-                type: integer
-            Accept-Ranges:
-              schema:
-                type: string
-          content:
-            application/octet-stream:
-              schema:
-                type: string
-                format: binary
+          $ref: "#/components/responses/FileMetadata"
         "404":
           description: Not cached
 
+  # ── /hf/ prefixed routes ──────────────────────────────────────────────
+
+  /hf/api/models/{org}/{repo}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [HuggingFace]
+      summary: Model info @ main (/hf prefix)
+      operationId: hf_prefixed_model_info_simple
+      responses:
+        "200":
+          $ref: "#/components/responses/ModelInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [HuggingFace]
+      summary: Check model existence @ main (/hf prefix)
+      operationId: hf_prefixed_model_info_simple_head
+      responses:
+        "200":
+          description: OK
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /hf/api/models/{org}/{repo}/revision/{revision}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
+    get:
+      tags: [HuggingFace]
+      summary: Model info at revision (/hf prefix)
+      operationId: hf_prefixed_model_info_revision
+      responses:
+        "200":
+          $ref: "#/components/responses/ModelInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [HuggingFace]
+      summary: Check revision existence (/hf prefix)
+      operationId: hf_prefixed_model_info_revision_head
+      responses:
+        "200":
+          description: OK
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /hf/api/models/{org}/{repo}/{*suffix}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: suffix
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Sub-path (e.g. tree/main)
+    get:
+      tags: [HuggingFace]
+      summary: Model API sub-path (/hf prefix)
+      operationId: hf_prefixed_model_api_suffix
+      responses:
+        "200":
+          description: Proxied upstream response (usually JSON)
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /hf/{org}/{repo}/resolve/{revision}/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
+      - $ref: "#/components/parameters/FilePath"
+    get:
+      tags: [HuggingFace]
+      summary: Download file (/hf prefix)
+      description: Same as legacy resolve, with /hf/ prefix.
+      operationId: hf_prefixed_file_resolve
+      responses:
+        "200":
+          $ref: "#/components/responses/FileDownload"
+        "206":
+          $ref: "#/components/responses/PartialFile"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [HuggingFace]
+      summary: File metadata (/hf prefix)
+      operationId: hf_prefixed_file_resolve_head
+      responses:
+        "200":
+          $ref: "#/components/responses/FileMetadata"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # ModelScope Hub
+  # ═══════════════════════════════════════════════════════════════════════
+
+  /ms/api/v1/models/{org}/{repo}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [ModelScope]
+      summary: Model info @ main
+      operationId: ms_model_info_simple
+      responses:
+        "200":
+          $ref: "#/components/responses/ModelInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [ModelScope]
+      summary: Check model existence @ main
+      operationId: ms_model_info_simple_head
+      responses:
+        "200":
+          description: OK
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /ms/api/v1/models/{org}/{repo}/revision/{revision}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
+    get:
+      tags: [ModelScope]
+      summary: Model info at revision
+      operationId: ms_model_info_revision
+      responses:
+        "200":
+          $ref: "#/components/responses/ModelInfo"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [ModelScope]
+      summary: Check revision existence
+      operationId: ms_model_info_revision_head
+      responses:
+        "200":
+          description: OK
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /ms/api/v1/models/{org}/{repo}/{*suffix}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: suffix
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Sub-path (e.g. repo/files)
+    get:
+      tags: [ModelScope]
+      summary: Model API sub-path
+      operationId: ms_model_api_suffix
+      responses:
+        "200":
+          description: Proxied upstream response (usually JSON)
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /ms/api/v1/models/{org}/{repo}/repo:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: Revision
+        in: query
+        required: true
+        schema:
+          type: string
+        description: Revision (e.g. master)
+      - name: FilePath
+        in: query
+        required: true
+        schema:
+          type: string
+        description: File path within repo
+    get:
+      tags: [ModelScope]
+      summary: Download file (query-param style)
+      description: ModelScope alternative file access via query parameters.
+      operationId: ms_repo_file_proxy
+      responses:
+        "200":
+          $ref: "#/components/responses/FileDownload"
+        "206":
+          $ref: "#/components/responses/PartialFile"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [ModelScope]
+      summary: File metadata (query-param style)
+      operationId: ms_repo_file_proxy_head
+      responses:
+        "200":
+          $ref: "#/components/responses/FileMetadata"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /ms/{org}/{repo}/resolve/{revision}/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Revision"
+      - $ref: "#/components/parameters/FilePath"
+    get:
+      tags: [ModelScope]
+      summary: Download file (resolve path)
+      description: ModelScope file download via /resolve/ path.
+      operationId: ms_file_resolve
+      responses:
+        "200":
+          $ref: "#/components/responses/FileDownload"
+        "206":
+          $ref: "#/components/responses/PartialFile"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    head:
+      tags: [ModelScope]
+      summary: File metadata (resolve path)
+      operationId: ms_file_resolve_head
+      responses:
+        "200":
+          $ref: "#/components/responses/FileMetadata"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+# ═══════════════════════════════════════════════════════════════════════════
 components:
+  parameters:
+    Org:
+      name: org
+      in: path
+      required: true
+      schema:
+        type: string
+      example: Qwen
+    Repo:
+      name: repo
+      in: path
+      required: true
+      schema:
+        type: string
+      example: Qwen3.5-0.8B
+    Revision:
+      name: revision
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Branch name or commit SHA
+      example: main
+    FilePath:
+      name: path
+      in: path
+      required: true
+      schema:
+        type: string
+      description: File path within repo (wildcard)
+      example: model.safetensors
+    RepoType:
+      name: repo_type
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [models, datasets, spaces]
+      example: models
+
   responses:
+    ModelInfo:
+      description: Model metadata
+      headers:
+        X-Repo-Commit:
+          schema:
+            type: string
+          description: Current commit SHA
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ModelInfo"
+
+    FileMetadata:
+      description: File metadata headers (no body)
+      headers:
+        Content-Length:
+          schema:
+            type: integer
+            format: int64
+        ETag:
+          schema:
+            type: string
+        Accept-Ranges:
+          schema:
+            type: string
+            example: bytes
+        Content-Type:
+          schema:
+            type: string
+        X-Repo-Commit:
+          schema:
+            type: string
+        X-Linked-Size:
+          schema:
+            type: integer
+            format: int64
+        X-Linked-ETag:
+          schema:
+            type: string
+
+    FileDownload:
+      description: Full file content
+      headers:
+        Content-Length:
+          schema:
+            type: integer
+            format: int64
+        Content-Type:
+          schema:
+            type: string
+        ETag:
+          schema:
+            type: string
+        Accept-Ranges:
+          schema:
+            type: string
+        X-Repo-Commit:
+          schema:
+            type: string
+        Content-Disposition:
+          schema:
+            type: string
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+
+    PartialFile:
+      description: Partial content (Range request)
+      headers:
+        Content-Range:
+          schema:
+            type: string
+        Content-Length:
+          schema:
+            type: integer
+      content:
+        application/octet-stream:
+          schema:
+            type: string
+            format: binary
+
     Unauthorized:
       description: Authentication required
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+
     NotFound:
       description: Not found
       content:
@@ -309,7 +615,7 @@ components:
       properties:
         id:
           type: string
-          example: Qwen/Qwen3.5-397B-A17B-FP8
+          example: Qwen/Qwen3.5-0.8B
         sha:
           type: string
           description: HEAD commit SHA
@@ -336,7 +642,35 @@ components:
       properties:
         rfilename:
           type: string
-          example: model.safetensors-00001-of-00094.safetensors
+          example: model.safetensors
+
+    Stats:
+      type: object
+      properties:
+        repo_count:
+          type: integer
+          format: int64
+        file_count:
+          type: integer
+          format: int64
+        trunk_count:
+          type: integer
+          format: int64
+        total_size:
+          type: integer
+          format: int64
+        unique_size:
+          type: integer
+          format: int64
+        compression_ratio:
+          type: number
+          format: double
+        fetched_bytes:
+          type: integer
+          format: int64
+        served_bytes:
+          type: integer
+          format: int64
 
     ErrorResponse:
       type: object
