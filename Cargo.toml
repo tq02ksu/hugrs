@@ -1,6 +1,6 @@
 [package]
 name = "hugrs"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "A transparent caching proxy for HuggingFace model files with content-addressed 4MB chunk storage"
 license = "MIT"
