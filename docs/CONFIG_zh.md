@@ -53,6 +53,7 @@ hugrs --max-size 10737418240 serve
 | `max_size` | integer | — | `HUGRS_MAX_SIZE` | `--max-size` | 最大磁盘占用（字节），超出触发 LRU 淘汰 |
 | `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | `--compression` | trunk 压缩方式：`zstd` 或 `none` |
 | `prefetch_depth` | integer | `0`（自动=CPU核数） | `HUGRS_PREFETCH_DEPTH` | `--prefetch-depth` | 缓存读取预读深度，`0`=自动（最多16），范围 1~16 |
+| `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | `--prefetch-budget-base` | 流式下载 session 的 chunk 预取预算基数。1 个活跃游标时用 `base`，2 个时用 `base/2`，3 个及以上时用 `base/4` |
 | `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | `--enable-sha256-verify` | 缓存读取时是否校验 SHA256，关闭可提升缓存读取速度 |
 
 ### `[database]` — 数据库配置
@@ -133,6 +134,18 @@ s3_endpoint = "http://localhost:9000"
 s3_prefix = "cache"
 ```
 
+### 高性能本地缓存
+
+```toml
+[storage]
+backend = "local"
+compression = "none"
+prefetch_depth = 16
+prefetch_budget_base = 8
+verify_sha256 = false
+max_size = 107374182400
+```
+
 ### 仅用环境变量（适合 Docker）
 
 ```bash
@@ -140,6 +153,10 @@ HUGRS_STORAGE_BACKEND=s3
 HUGRS_S3_BUCKET=my-bucket
 HUGRS_S3_REGION=us-east-1
 HUGRS_MAX_SIZE=53687091200       # 50GB
+HUGRS_COMPRESSION=none
+HUGRS_PREFETCH_DEPTH=8
+HUGRS_PREFETCH_BUDGET_BASE=8
+HUGRS_VERIFY_SHA256=false
 HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=8080
 HUGRS_HF_ENDPOINT=https://hf-mirror.com
@@ -171,6 +188,7 @@ hugrs [全局参数] <子命令>
       --hf-proxy <URL>         HTTP 代理
       --max-size <BYTES>       最大磁盘占用
       --prefetch-depth <N>     缓存预读深度（0=自动）
+      --prefetch-budget-base <N>  流式下载的 chunk 预取预算基数
       --enable-sha256-verify <BOOL>  是否开启缓存 SHA256 校验
 
 子命令:
@@ -192,6 +210,7 @@ HUGRS_LOCAL_ROOT=/data/hugrs/trunks
 HUGRS_DB_PATH=/data/hugrs/hugrs.db
 HUGRS_MAX_SIZE=107374182400
 HUGRS_PREFETCH_DEPTH=8
+HUGRS_PREFETCH_BUDGET_BASE=8
 HUGRS_VERIFY_SHA256=true
 HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=3000

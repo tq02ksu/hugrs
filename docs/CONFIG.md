@@ -53,6 +53,7 @@ hugrs --max-size 10737418240 serve
 | `max_size` | integer | — | `HUGRS_MAX_SIZE` | `--max-size` | Max disk usage in bytes. Triggers LRU eviction when exceeded |
 | `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | `--compression` | Trunk compression: `zstd` or `none` |
 | `prefetch_depth` | integer | `0` (auto=CPU cores) | `HUGRS_PREFETCH_DEPTH` | `--prefetch-depth` | Cache read prefetch depth. `0`=auto (max 16). Range 1–16 |
+| `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | `--prefetch-budget-base` | Base chunk prefetch budget for streaming sessions. Effective budgets are `base`, `base/2`, `base/4` for 1, 2, and 3+ active cursors |
 | `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | `--enable-sha256-verify` | Validate SHA256 on cached reads. Disable for higher throughput |
 
 ### `[database]` — Database
@@ -130,6 +131,7 @@ proxy = "http://proxy.internal:8080"
 backend = "local"
 compression = "none"
 prefetch_depth = 16
+prefetch_budget_base = 8
 verify_sha256 = false
 max_size = 107374182400
 ```
@@ -154,6 +156,7 @@ HUGRS_S3_REGION=us-east-1
 HUGRS_MAX_SIZE=53687091200       # 50GB
 HUGRS_COMPRESSION=none
 HUGRS_PREFETCH_DEPTH=8
+HUGRS_PREFETCH_BUDGET_BASE=8
 HUGRS_VERIFY_SHA256=false
 HUGRS_SERVER_HOST=0.0.0.0
 HUGRS_SERVER_PORT=8080
@@ -182,6 +185,7 @@ Global Flags:
       --compression <MODE>     Trunk compression: zstd | none
       --max-size <BYTES>       Max disk usage
       --prefetch-depth <N>     Cache read prefetch depth (0=auto)
+      --prefetch-budget-base <N>  Base chunk prefetch budget for streaming sessions
       --enable-sha256-verify <BOOL>  Enable SHA256 validation on cached reads
       --server-host <HOST>     Listen address
       --server-port <PORT>     Listen port
@@ -208,6 +212,7 @@ HUGRS_LOCAL_ROOT=/data/hugrs/trunks
 HUGRS_DB_PATH=/data/hugrs/hugrs.db
 HUGRS_COMPRESSION=none
 HUGRS_PREFETCH_DEPTH=8
+HUGRS_PREFETCH_BUDGET_BASE=8
 HUGRS_VERIFY_SHA256=true
 HUGRS_MAX_SIZE=107374182400
 HUGRS_SERVER_HOST=0.0.0.0

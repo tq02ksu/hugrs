@@ -38,12 +38,19 @@ pub struct StorageConfig {
     #[serde(default = "default_prefetch_depth")]
     pub prefetch_depth: usize,
 
+    #[serde(default = "default_prefetch_budget_base")]
+    pub prefetch_budget_base: usize,
+
     #[serde(default = "default_verify_sha256")]
     pub verify_sha256: bool,
 }
 
 fn default_prefetch_depth() -> usize {
     0 // 0 means auto-detect (num CPUs, max 16)
+}
+
+fn default_prefetch_budget_base() -> usize {
+    8
 }
 
 fn default_verify_sha256() -> bool {
@@ -131,6 +138,7 @@ impl Default for StorageConfig {
             compression: Compression::default(),
             max_size: None,
             prefetch_depth: default_prefetch_depth(),
+            prefetch_budget_base: default_prefetch_budget_base(),
             verify_sha256: default_verify_sha256(),
         }
     }
@@ -184,6 +192,7 @@ pub struct CliOverrides {
     pub compression: Option<String>,
     pub max_size: Option<u64>,
     pub prefetch_depth: Option<usize>,
+    pub prefetch_budget_base: Option<usize>,
     pub enable_sha256_verify: Option<bool>,
 }
 
@@ -240,6 +249,9 @@ impl Config {
         }
         if let Ok(val) = std::env::var("HUGRS_PREFETCH_DEPTH") {
             config.storage.prefetch_depth = val.parse()?;
+        }
+        if let Ok(val) = std::env::var("HUGRS_PREFETCH_BUDGET_BASE") {
+            config.storage.prefetch_budget_base = val.parse()?;
         }
         if let Ok(val) = std::env::var("HUGRS_VERIFY_SHA256") {
             config.storage.verify_sha256 = val.parse()?;
@@ -298,6 +310,9 @@ impl Config {
         }
         if let Some(v) = overrides.prefetch_depth {
             config.storage.prefetch_depth = v;
+        }
+        if let Some(v) = overrides.prefetch_budget_base {
+            config.storage.prefetch_budget_base = v;
         }
         if let Some(v) = overrides.enable_sha256_verify {
             config.storage.verify_sha256 = v;

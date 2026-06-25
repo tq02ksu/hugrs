@@ -91,7 +91,10 @@ async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
             "/{org}/{repo}/resolve/{revision}/{*path}",
             head(mock_head).get(mock_get),
         )
-        .route("/api/models/{org}/{repo}/{*path}", get(mock_model_api_proxy))
+        .route(
+            "/api/models/{org}/{repo}/{*path}",
+            get(mock_model_api_proxy),
+        )
         .with_state(state.clone());
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = format!("http://{}", l.local_addr().unwrap());
@@ -120,6 +123,7 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         http,
         head,
         0,
+        8,
         true,
         reqwest::Client::new(),
     )
@@ -146,6 +150,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
             compression: Compression::None,
             max_size: None,
             prefetch_depth: 4,
+            prefetch_budget_base: 8,
             verify_sha256: true,
         },
         database: hugrs::config::DatabaseConfig {

@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
             http_client,
             head_client,
             config.storage.prefetch_depth,
+            config.storage.prefetch_budget_base,
             config.storage.verify_sha256,
             stream_client,
         );

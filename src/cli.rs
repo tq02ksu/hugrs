@@ -53,6 +53,9 @@ pub struct Cli {
     pub prefetch_depth: usize,
 
     #[arg(long, global = true)]
+    pub prefetch_budget_base: Option<usize>,
+
+    #[arg(long, global = true)]
     pub enable_sha256_verify: Option<bool>,
 
     #[arg(long, global = true)]
@@ -84,6 +87,7 @@ impl Cli {
             compression: self.compression.clone(),
             max_size: self.max_size,
             prefetch_depth: Some(self.prefetch_depth),
+            prefetch_budget_base: self.prefetch_budget_base,
             enable_sha256_verify: self.enable_sha256_verify,
             hf_timeout: self.hf_timeout,
             hf_connect_timeout: self.hf_connect_timeout,

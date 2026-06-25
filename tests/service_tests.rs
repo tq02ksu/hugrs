@@ -21,6 +21,7 @@ async fn test_upload_and_download() {
         reqwest::Client::new(),
         reqwest::Client::new(),
         0,
+        8,
         true,
         reqwest::Client::new(),
     );
@@ -59,6 +60,7 @@ async fn test_delete_and_gc() {
         reqwest::Client::new(),
         reqwest::Client::new(),
         0,
+        8,
         true,
         reqwest::Client::new(),
     );
@@ -92,6 +94,7 @@ async fn test_stats() {
         reqwest::Client::new(),
         reqwest::Client::new(),
         0,
+        8,
         true,
         reqwest::Client::new(),
     );
@@ -125,6 +128,7 @@ async fn test_upload_duplicate_file_overwrites() {
         reqwest::Client::new(),
         reqwest::Client::new(),
         0,
+        8,
         true,
         reqwest::Client::new(),
     );
@@ -158,6 +162,7 @@ async fn test_lru_eviction() {
         reqwest::Client::new(),
         reqwest::Client::new(),
         0,
+        8,
         true,
         reqwest::Client::new(),
     );
@@ -193,6 +198,7 @@ async fn test_lru_eviction_by_repo() {
         reqwest::Client::new(),
         reqwest::Client::new(),
         0,
+        8,
         true,
         reqwest::Client::new(),
     );

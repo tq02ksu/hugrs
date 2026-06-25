@@ -118,6 +118,7 @@ async fn test_multiple_gets_no_duplicate_downloads() {
         http_client,
         head_client,
         0,
+        8,
         true,
         reqwest::Client::new(),
     ));
@@ -222,6 +223,7 @@ async fn test_partial_cache_no_redundant_download() {
         http_client,
         head_client,
         0,
+        8,
         true,
         reqwest::Client::new(),
     );
@@ -332,6 +334,7 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
         http_client,
         head_client,
         0,
+        8,
         true,
         reqwest::Client::new(),
     ));

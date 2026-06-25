@@ -27,6 +27,7 @@ pub struct CacheService {
     pub http_client: reqwest::Client,
     pub head_client: reqwest::Client,
     prefetch_depth: usize,
+    prefetch_budget_base: usize,
     verify_sha256: bool,
     fetched_bytes: Arc<AtomicU64>,
     served_bytes: Arc<AtomicU64>,
@@ -42,6 +43,7 @@ impl CacheService {
         http_client: reqwest::Client,
         head_client: reqwest::Client,
         prefetch_depth: usize,
+        prefetch_budget_base: usize,
         verify_sha256: bool,
         stream_client: reqwest::Client,
     ) -> Self {
@@ -70,6 +72,7 @@ impl CacheService {
             http_client,
             head_client,
             prefetch_depth,
+            prefetch_budget_base,
             verify_sha256,
             fetched_bytes,
             served_bytes,
@@ -735,9 +738,14 @@ impl CacheService {
             return self.stream_small_file(url, name, &file).await;
         }
 
-        let session = self
-            .fs_manager
-            .get_or_create(file.id, name, repo, url, total_size);
+        let session = self.fs_manager.get_or_create(
+            file.id,
+            name,
+            repo,
+            url,
+            total_size,
+            self.prefetch_budget_base,
+        );
         session
             .subscribe(Some((range_start.unwrap_or(0), range_end)))
             .await

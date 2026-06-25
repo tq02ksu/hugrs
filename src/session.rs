@@ -15,11 +15,11 @@ type ClientRange = (u64, u64);
 type ClientSender = mpsc::Sender<Result<Bytes, anyhow::Error>>;
 type Subscribers = StdMutex<Vec<(ClientRange, ClientSender)>>;
 
-fn prefetch_budget(active_cursors: usize) -> usize {
+fn prefetch_budget(base: usize, active_cursors: usize) -> usize {
     match active_cursors {
-        0 | 1 => 16,
-        2 => 8,
-        _ => 4,
+        0 | 1 => base,
+        2 => (base / 2).max(1),
+        _ => (base / 4).max(1),
     }
 }
 
@@ -256,6 +256,7 @@ pub struct FileDownloadSession {
     backend: Arc<dyn StorageBackend>,
     head_client: reqwest::Client,
     served_bytes: Arc<AtomicU64>,
+    prefetch_budget_base: usize,
 
     task: StdMutex<Option<JoinHandle<()>>>,
     state: AtomicU8,
@@ -277,6 +278,7 @@ impl FileDownloadSession {
         backend: Arc<dyn StorageBackend>,
         head_client: reqwest::Client,
         served_bytes: Arc<AtomicU64>,
+        prefetch_budget_base: usize,
     ) -> Self {
         Self {
             file_id,
@@ -293,6 +295,7 @@ impl FileDownloadSession {
             backend,
             head_client,
             served_bytes,
+            prefetch_budget_base,
             task: StdMutex::new(None),
             state: AtomicU8::new(0),
             file_ready: AtomicBool::new(false),
@@ -449,7 +452,8 @@ impl FileDownloadSession {
                             );
                         }
 
-                        let budget = prefetch_budget(active_cursors.len());
+                        let budget =
+                            prefetch_budget(self.prefetch_budget_base, active_cursors.len());
                         let per_cursor = (budget / active_cursors.len().max(1)).max(1);
                         let mut cached_prefetches = HashSet::new();
                         for cursor in active_cursors {
@@ -707,6 +711,7 @@ impl FileSessionManager {
         repo: &str,
         url: &str,
         total_size: u64,
+        prefetch_budget_base: usize,
     ) -> Arc<FileDownloadSession> {
         self.map
             .entry(file_id)
@@ -724,6 +729,7 @@ impl FileSessionManager {
                     self.backend.clone(),
                     self.head_client.clone(),
                     self.served_bytes.clone(),
+                    prefetch_budget_base,
                 ))
             })
             .clone()
@@ -740,12 +746,13 @@ mod tests {
         compute_active_cursors, prefetch_budget, retain_active_prefetches, select_next_chunk,
         FileDownloadSession,
     };
+    use crate::config::Config;
     use crate::metadata::MetadataStore;
     use crate::storage::local::LocalBackend;
     use crate::storage::Compression;
     use std::collections::HashSet;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::task::JoinHandle;
 
@@ -771,9 +778,16 @@ mod tests {
         let cursors = compute_active_cursors(&client_ranges, &completed, 4 * 1024 * 1024, 30);
 
         assert_eq!(cursors, vec![0, 20]);
-        assert_eq!(prefetch_budget(1), 16);
-        assert_eq!(prefetch_budget(2), 8);
-        assert_eq!(prefetch_budget(3), 4);
+        assert_eq!(prefetch_budget(8, 1), 8);
+        assert_eq!(prefetch_budget(8, 2), 4);
+        assert_eq!(prefetch_budget(8, 3), 2);
+    }
+
+    #[test]
+    fn config_defaults_prefetch_budget_base_to_eight() {
+        let config = Config::default();
+
+        assert_eq!(config.storage.prefetch_budget_base, 8);
     }
 
     #[test]
@@ -818,6 +832,7 @@ mod tests {
             backend,
             client,
             served_bytes,
+            8,
         ));
 
         *session.task.lock().unwrap() = Some(tokio::spawn(async {}) as JoinHandle<()>);
@@ -857,13 +872,15 @@ mod tests {
             backend,
             client,
             served_bytes,
+            8,
         );
 
         session.track_prefetch(18);
         session.track_prefetch(19);
         session.track_prefetch(20);
 
-        let active = session.finish_prefetches(&HashSet::from([18usize]), &HashSet::from([20usize]));
+        let active =
+            session.finish_prefetches(&HashSet::from([18usize]), &HashSet::from([20usize]));
 
         assert_eq!(active, 1);
         assert_eq!(session.prefetch_active(), 1);
