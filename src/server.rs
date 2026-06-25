@@ -62,18 +62,9 @@ pub async fn run(
             get(hf_file_proxy).head(hf_file_proxy),
         )
         // Git/LFS proxy (legacy)
-        .route(
-            "/{org}/{repo}/info/refs",
-            get(git::git_info_refs),
-        )
-        .route(
-            "/{org}/{repo}/git-upload-pack",
-            post(git::git_upload_pack),
-        )
-        .route(
-            "/{org}/{repo}/info/lfs/objects/batch",
-            post(git::lfs_batch),
-        )
+        .route("/{org}/{repo}/info/refs", get(git::git_info_refs))
+        .route("/{org}/{repo}/git-upload-pack", post(git::git_upload_pack))
+        .route("/{org}/{repo}/info/lfs/objects/batch", post(git::lfs_batch))
         // New /hf/ prefix routes
         .route(
             "/hf/api/models/{org}/{repo}",
@@ -92,10 +83,7 @@ pub async fn run(
             get(hf_file_proxy).head(hf_file_proxy),
         )
         // Git/LFS proxy (/hf/)
-        .route(
-            "/hf/{org}/{repo}/info/refs",
-            get(git::git_info_refs),
-        )
+        .route("/hf/{org}/{repo}/info/refs", get(git::git_info_refs))
         .route(
             "/hf/{org}/{repo}/git-upload-pack",
             post(git::git_upload_pack),
@@ -126,10 +114,7 @@ pub async fn run(
             get(ms_file_proxy).head(ms_file_proxy),
         )
         // Git/LFS proxy (/ms/)
-        .route(
-            "/ms/{org}/{repo}/info/refs",
-            get(git::git_info_refs),
-        )
+        .route("/ms/{org}/{repo}/info/refs", get(git::git_info_refs))
         .route(
             "/ms/{org}/{repo}/git-upload-pack",
             post(git::git_upload_pack),
@@ -401,7 +386,10 @@ pub async fn hf_file_proxy(
     let cache_name = format!("{}/{}", repo_id, path);
     let url = format!("{}/{}/resolve/{}/{}", endpoint, repo_id, revision, path);
     let user_agent = forwarded_user_agent(&headers);
-    file_proxy_inner(state, "hf", url, cache_name, method, headers, path, user_agent, false).await
+    file_proxy_inner(
+        state, "hf", url, cache_name, method, headers, path, user_agent, false,
+    )
+    .await
 }
 
 pub async fn ms_file_proxy(
@@ -415,7 +403,10 @@ pub async fn ms_file_proxy(
     let cache_name = format!("{}/{}", repo_id, path);
     let url = format!("{}/{}/resolve/{}/{}", endpoint, repo_id, revision, path);
     let user_agent = forwarded_user_agent(&headers);
-    file_proxy_inner(state, "ms", url, cache_name, method, headers, path, user_agent, false).await
+    file_proxy_inner(
+        state, "ms", url, cache_name, method, headers, path, user_agent, false,
+    )
+    .await
 }
 
 pub async fn ms_repo_file_proxy(
@@ -438,8 +429,10 @@ pub async fn ms_repo_file_proxy(
     );
 
     let user_agent = forwarded_user_agent(&headers);
-    file_proxy_inner(state, "ms", url, cache_name, method, headers, file_path, user_agent, true)
-        .await
+    file_proxy_inner(
+        state, "ms", url, cache_name, method, headers, file_path, user_agent, true,
+    )
+    .await
 }
 
 async fn file_proxy_inner(

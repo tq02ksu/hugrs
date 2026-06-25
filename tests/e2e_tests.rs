@@ -148,7 +148,9 @@ async fn mock_ms_cdn_get(
         );
     }
 
-    Ok(builder.body(axum::body::Body::from(slice.to_vec())).unwrap())
+    Ok(builder
+        .body(axum::body::Body::from(slice.to_vec()))
+        .unwrap())
 }
 
 async fn mock_model_api_proxy(req: axum::extract::Request) -> Response {
@@ -576,8 +578,14 @@ async fn test_ms_repo_second_get_uses_cache() {
         .unwrap();
     assert_eq!(body2.as_ref(), test_data.as_slice());
 
-    assert_eq!(first_repo_gets, state.ms_repo_get_count.load(Ordering::SeqCst));
-    assert_eq!(first_cdn_gets, state.ms_cdn_get_count.load(Ordering::SeqCst));
+    assert_eq!(
+        first_repo_gets,
+        state.ms_repo_get_count.load(Ordering::SeqCst)
+    );
+    assert_eq!(
+        first_cdn_gets,
+        state.ms_cdn_get_count.load(Ordering::SeqCst)
+    );
 }
 
 #[tokio::test]

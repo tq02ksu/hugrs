@@ -126,7 +126,15 @@ async fn test_multiple_gets_no_duplicate_downloads() {
     let upstream_url = format!("http://{}/test/repo/resolve/main/test.bin", addr);
 
     let (file, content_length, stream) = service
-        .stream_from_upstream(&upstream_url, "test.bin", "test/repo", "hf", None, None, None)
+        .stream_from_upstream(
+            &upstream_url,
+            "test.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -148,7 +156,15 @@ async fn test_multiple_gets_no_duplicate_downloads() {
     assert_eq!(upstream_gets_after_first, expected_chunks);
 
     let (_file2, content_length2, stream2) = service
-        .stream_from_upstream(&upstream_url, "test.bin", "test/repo", "hf", None, None, None)
+        .stream_from_upstream(
+            &upstream_url,
+            "test.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     // Verify file is now complete after first download
@@ -267,7 +283,15 @@ async fn test_partial_cache_no_redundant_download() {
     // Now call stream_from_upstream - should only download chunks 1 and 2
     let gets_before = get_count.load(Ordering::SeqCst);
     let (_, _, stream) = service
-        .stream_from_upstream(&upstream_url, "part.bin", "test/repo", "hf", None, None, None)
+        .stream_from_upstream(
+            &upstream_url,
+            "part.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -345,7 +369,15 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
     use futures_util::StreamExt;
 
     let (_, _, stream1) = service
-        .stream_from_upstream(&upstream_url, "test.bin", "test/repo", "hf", None, None, None)
+        .stream_from_upstream(
+            &upstream_url,
+            "test.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     let mut stream1 = stream1;
@@ -360,7 +392,15 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
     let (_, content_length2, stream2) = service
-        .stream_from_upstream(&upstream_url, "test.bin", "test/repo", "hf", None, None, None)
+        .stream_from_upstream(
+            &upstream_url,
+            "test.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(content_length2 as usize, test_data.len());

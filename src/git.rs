@@ -82,7 +82,14 @@ pub async fn git_upload_pack(
         .await
         .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{}", e)))?;
 
-    git_proxy_pass(client, &upstream_url, Method::POST, headers, Some(body.to_vec())).await
+    git_proxy_pass(
+        client,
+        &upstream_url,
+        Method::POST,
+        headers,
+        Some(body.to_vec()),
+    )
+    .await
 }
 
 pub async fn lfs_batch(
@@ -94,10 +101,7 @@ pub async fn lfs_batch(
 ) -> Result<Response, crate::server::AppError> {
     let source = git_source_from_path(uri.path());
     let (endpoint, client, _) = hub_config(&state, source);
-    let upstream_url = format!(
-        "{}/{}/{}.git/info/lfs/objects/batch",
-        endpoint, owner, repo
-    );
+    let upstream_url = format!("{}/{}/{}.git/info/lfs/objects/batch", endpoint, owner, repo);
 
     let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
         .await
@@ -118,14 +122,16 @@ pub async fn lfs_batch(
         req = req.header("User-Agent", ua);
     }
 
-    let resp = req.body(body).send().await.map_err(|e| {
-        crate::server::AppError::from(anyhow::anyhow!("LFS upstream error: {}", e))
-    })?;
+    let resp =
+        req.body(body).send().await.map_err(|e| {
+            crate::server::AppError::from(anyhow::anyhow!("LFS upstream error: {}", e))
+        })?;
 
     let status = resp.status();
-    let resp_text = resp.text().await.map_err(|e| {
-        crate::server::AppError::from(anyhow::anyhow!("LFS read error: {}", e))
-    })?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("LFS read error: {}", e)))?;
 
     let scheme = "http";
     let host = headers
@@ -164,15 +170,17 @@ async fn git_proxy_pass(
         req = req.body(b.clone());
     }
 
-    let resp = req.send().await.map_err(|e| {
-        crate::server::AppError::from(anyhow::anyhow!("git upstream error: {}", e))
-    })?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("git upstream error: {}", e)))?;
 
     let status = resp.status();
     let resp_headers = resp.headers().clone();
-    let resp_body = resp.bytes().await.map_err(|e| {
-        crate::server::AppError::from(anyhow::anyhow!("git read error: {}", e))
-    })?;
+    let resp_body = resp
+        .bytes()
+        .await
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("git read error: {}", e)))?;
 
     let mut builder = axum::response::Response::builder().status(status);
     for (key, value) in resp_headers.iter() {
