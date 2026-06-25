@@ -70,7 +70,15 @@ snapshot_download("Qwen/Qwen3.5-0.8B")
 ### modelscope download
 
 ```bash
-modelscope download qwen/Qwen3.5-0.6B --endpoint http://127.0.0.1:3000/ms
+modelscope download qwen/Qwen3.5-0.8B --endpoint http://127.0.0.1:3000/ms
+```
+
+### git clone
+
+```bash
+git clone http://127.0.0.1:3000/Qwen/Qwen3.5-0.8B
+git clone http://127.0.0.1:3000/hf/Qwen/Qwen3.5-0.8B
+git clone http://127.0.0.1:3000/ms/qwen/Qwen3.5-0.8B
 ```
 
 The proxy follows upstream 302 redirects internally and returns merged headers — all three tools work with zero special configuration beyond the endpoint.

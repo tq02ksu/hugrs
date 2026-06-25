@@ -17,6 +17,8 @@ tags:
     description: HuggingFace Hub proxy (used by huggingface-cli, hfd.sh, huggingface_hub SDK)
   - name: ModelScope
     description: ModelScope Hub proxy (used by modelscope CLI/SDK)
+  - name: Git
+    description: Git/LFS proxy for git clone support
 
 paths:
   # ═══════════════════════════════════════════════════════════════════════
@@ -468,6 +470,137 @@ paths:
           $ref: "#/components/responses/FileMetadata"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # Git/LFS Proxy
+  # ═══════════════════════════════════════════════════════════════════════
+
+  /{org}/{repo}/info/refs:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: service
+        in: query
+        required: true
+        schema:
+          type: string
+          example: git-upload-pack
+    get:
+      tags: [HuggingFace, Git]
+      summary: Git info/refs (legacy)
+      operationId: git_info_refs
+      responses:
+        "200":
+          description: Git upload-pack advertisement
+
+  /{org}/{repo}/git-upload-pack:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [HuggingFace, Git]
+      summary: Git upload-pack (legacy)
+      operationId: git_upload_pack
+      responses:
+        "200":
+          description: Git packfile data
+
+  /{org}/{repo}/info/lfs/objects/batch:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [HuggingFace, Git]
+      summary: Git LFS batch API (legacy)
+      description: Proxies LFS batch to upstream, rewrites download URLs to proxy.
+      operationId: lfs_batch
+      responses:
+        "200":
+          description: LFS batch response with rewritten download URLs
+
+  /hf/{org}/{repo}/info/refs:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: service
+        in: query
+        required: true
+        schema:
+          type: string
+          example: git-upload-pack
+    get:
+      tags: [HuggingFace, Git]
+      summary: Git info/refs (/hf prefix)
+      operationId: hf_prefixed_git_info_refs
+      responses:
+        "200":
+          description: Git upload-pack advertisement
+
+  /hf/{org}/{repo}/git-upload-pack:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [HuggingFace, Git]
+      summary: Git upload-pack (/hf prefix)
+      operationId: hf_prefixed_git_upload_pack
+      responses:
+        "200":
+          description: Git packfile data
+
+  /hf/{org}/{repo}/info/lfs/objects/batch:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [HuggingFace, Git]
+      summary: Git LFS batch API (/hf prefix)
+      operationId: hf_prefixed_lfs_batch
+      responses:
+        "200":
+          description: LFS batch response with rewritten download URLs
+
+  /ms/{org}/{repo}/info/refs:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+      - name: service
+        in: query
+        required: true
+        schema:
+          type: string
+          example: git-upload-pack
+    get:
+      tags: [ModelScope, Git]
+      summary: Git info/refs (/ms prefix)
+      operationId: ms_git_info_refs
+      responses:
+        "200":
+          description: Git upload-pack advertisement
+
+  /ms/{org}/{repo}/git-upload-pack:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [ModelScope, Git]
+      summary: Git upload-pack (/ms prefix)
+      operationId: ms_git_upload_pack
+      responses:
+        "200":
+          description: Git packfile data
+
+  /ms/{org}/{repo}/info/lfs/objects/batch:
+    parameters:
+      - $ref: "#/components/parameters/Org"
+      - $ref: "#/components/parameters/Repo"
+    post:
+      tags: [ModelScope, Git]
+      summary: Git LFS batch API (/ms prefix)
+      operationId: ms_lfs_batch
+      responses:
+        "200":
+          description: LFS batch response with rewritten download URLs
 
 # ═══════════════════════════════════════════════════════════════════════════
 components:

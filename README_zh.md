@@ -70,7 +70,15 @@ snapshot_download("Qwen/Qwen3.5-0.8B")
 ### modelscope download
 
 ```bash
-modelscope download qwen/Qwen3.5-0.6B --endpoint http://127.0.0.1:3000/ms
+modelscope download qwen/Qwen3.5-0.8B --endpoint http://127.0.0.1:3000/ms
+```
+
+### git clone
+
+```bash
+git clone http://127.0.0.1:3000/Qwen/Qwen3.5-0.8B
+git clone http://127.0.0.1:3000/hf/Qwen/Qwen3.5-0.8B
+git clone http://127.0.0.1:3000/ms/qwen/Qwen3.5-0.8B
 ```
 
 代理内部跟随上游 30x 跳转并合并响应头 — 以上工具除端点外无需额外配置。
