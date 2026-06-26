@@ -533,20 +533,6 @@ impl CacheService {
         self.backend.put(key, data).await
     }
 
-    pub fn get_http_cache(&self, url: &str) -> anyhow::Result<Option<(u16, String, Vec<u8>)>> {
-        self.metadata.get_http_cache(url)
-    }
-
-    pub fn set_http_cache(
-        &self,
-        url: &str,
-        status: u16,
-        headers: &str,
-        body: &[u8],
-    ) -> anyhow::Result<()> {
-        self.metadata.set_http_cache(url, status, headers, body)
-    }
-
     pub async fn stream_cached_file(
         &self,
         name: &str,

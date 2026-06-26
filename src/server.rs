@@ -251,26 +251,6 @@ async fn model_info_inner(
         endpoint, api_prefix, repo_id, revision
     );
 
-    {
-        let service = state.service.lock().await;
-        if let Ok(Some((status, headers, body))) = service.get_http_cache(&url) {
-            tracing::info!("model_info cache hit: {}", url);
-            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
-            let mut builder = Response::builder().status(status);
-            for line in headers.lines() {
-                if let Some(col) = line.find(':') {
-                    let name = line[..col].trim();
-                    let value = line[col + 1..].trim();
-                    builder = builder.header(name, value);
-                }
-            }
-            return builder
-                .body(body.into())
-                .map_err(|e| AppError::Anyhow(e.into()));
-        }
-        drop(service);
-    }
-
     tracing::info!("model_info proxy to: {}", url);
     let mut req = client.get(&url);
     let token = match source {
@@ -293,18 +273,6 @@ async fn model_info_inner(
         .await
         .map_err(|e| AppError::Anyhow(e.into()))?
         .into_bytes();
-
-    let headers_text = upstream_headers
-        .iter()
-        .map(|(n, v)| format!("{}: {}", n, v))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    {
-        let service = state.service.lock().await;
-        let _ = service.set_http_cache(&url, status.as_u16(), &headers_text, &body);
-        drop(service);
-    }
 
     let mut builder = Response::builder().status(status);
     for (name, value) in &upstream_headers {

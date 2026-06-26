@@ -74,14 +74,15 @@ impl MetadataStore {
     fn init_schema(&self) -> anyhow::Result<()> {
         let mut conn = self.conn.lock().unwrap();
 
-        Self::run_legacy_migrations(&conn)?;
-
         let migrations = Migrations::new(vec![
-            M::up(include_str!("migrations/001_initial_core.sql")),
+            M::up(include_str!("migrations/001_initial_schema.sql")),
             M::up(include_str!("migrations/002_rename_trunk_to_chunk.sql")),
+            M::up(include_str!("migrations/003_drop_http_cache.sql")),
         ]);
 
         migrations.to_latest(&mut *conn)?;
+
+        Self::run_legacy_migrations(&conn)?;
 
         Ok(())
     }
@@ -150,15 +151,21 @@ impl MetadataStore {
             conn.execute_batch("PRAGMA foreign_keys = ON")?;
         }
 
-        if conn
-            .prepare("SELECT compressed_size FROM trunks LIMIT 0")
-            .is_ok()
-            || conn
-                .prepare("SELECT compressed_size FROM chunks LIMIT 0")
-                .is_ok()
-        {
+        let table = if conn.prepare("SELECT 1 FROM chunks LIMIT 0").is_ok() {
+            "chunks"
         } else if conn.prepare("SELECT 1 FROM trunks LIMIT 0").is_ok() {
-            let _ = conn.execute_batch("ALTER TABLE trunks ADD COLUMN compressed_size INTEGER");
+            "trunks"
+        } else {
+            return Ok(());
+        };
+        let has_col = conn
+            .prepare(&format!("SELECT compressed_size FROM {} LIMIT 0", table))
+            .is_ok();
+        if !has_col {
+            let _ = conn.execute_batch(&format!(
+                "ALTER TABLE {} ADD COLUMN compressed_size INTEGER",
+                table
+            ));
         }
 
         Ok(())
@@ -481,32 +488,5 @@ impl MetadataStore {
         })
     }
 
-    pub fn get_http_cache(&self, url: &str) -> anyhow::Result<Option<(u16, String, Vec<u8>)>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT status, headers, body FROM http_cache WHERE url = ?1")?;
-        let mut rows = stmt.query_map(params![url], |row| {
-            Ok((
-                row.get::<_, i64>(0)? as u16,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-            ))
-        })?;
-        Ok(rows.next().transpose()?)
-    }
 
-    pub fn set_http_cache(
-        &self,
-        url: &str,
-        status: u16,
-        headers: &str,
-        body: &[u8],
-    ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR REPLACE INTO http_cache (url, status, headers, body, cached_at) VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-            params![url, status as i64, headers, body],
-        )?;
-        Ok(())
-    }
 }
