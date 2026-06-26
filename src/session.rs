@@ -1,5 +1,5 @@
 use crate::chunker;
-use crate::metadata::{File, MetadataStore};
+use crate::metadata::File;
 use crate::storage::StorageBackend;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -65,6 +65,15 @@ fn retain_active_prefetches(
     inflight_prefetches.len()
 }
 
+pub struct ChunkStoredEvent {
+    pub sha256: String,
+    pub path: String,
+    pub data_len: i64,
+    pub stored_size: i64,
+    pub file_id: i64,
+    pub chunk_idx: i64,
+}
+
 // ── ChunkSession ──────────────────────────────────────────────
 
 pub struct ChunkSession {
@@ -76,7 +85,7 @@ pub struct SessionTable {
     map: Arc<DashMap<(i64, i64), Arc<ChunkSession>>>,
     http_client: reqwest::Client,
     backend: Arc<dyn StorageBackend>,
-    metadata: Arc<MetadataStore>,
+    event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
     fetched_bytes: Arc<AtomicU64>,
 }
 
@@ -84,14 +93,14 @@ impl SessionTable {
     pub fn new(
         http_client: reqwest::Client,
         backend: Arc<dyn StorageBackend>,
-        metadata: Arc<MetadataStore>,
+        event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
         fetched_bytes: Arc<AtomicU64>,
     ) -> Self {
         Self {
             map: Arc::new(DashMap::new()),
             http_client,
             backend,
-            metadata,
+            event_tx,
             fetched_bytes,
         }
     }
@@ -107,11 +116,17 @@ impl SessionTable {
         total_size: u64,
         chunk_count: usize,
         user_agent: Option<&str>,
+        cached_chunks: &StdMutex<std::collections::HashMap<usize, String>>,
     ) -> broadcast::Receiver<Arc<Bytes>> {
         let key = (file_id, chunk_idx);
 
-        if let Ok(Some(sha)) = self.metadata.is_chunk_linked(file_id, chunk_idx as usize) {
-            if let Ok(data) = self.backend.get(&sha).await {
+        let cached_sha = cached_chunks
+            .lock()
+            .unwrap()
+            .get(&(chunk_idx as usize))
+            .cloned();
+        if let Some(ref sha) = cached_sha {
+            if let Ok(data) = self.backend.get(sha).await {
                 let (tx, _) = broadcast::channel::<Arc<Bytes>>(1);
                 let rx = tx.subscribe();
                 let _ = tx.send(Arc::new(Bytes::from(data)));
@@ -127,7 +142,7 @@ impl SessionTable {
         let rx = tx.subscribe();
 
         let backend = self.backend.clone();
-        let metadata = self.metadata.clone();
+        let event_tx = self.event_tx.clone();
         let client = self.http_client.clone();
         let url = url.to_string();
         let tx2 = tx.clone();
@@ -138,7 +153,7 @@ impl SessionTable {
             match Self::download_and_store(
                 client,
                 backend,
-                metadata,
+                event_tx,
                 url,
                 fetched_bytes,
                 file_id,
@@ -176,7 +191,7 @@ impl SessionTable {
     async fn download_and_store(
         client: reqwest::Client,
         backend: Arc<dyn StorageBackend>,
-        metadata: Arc<MetadataStore>,
+        event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
         url: String,
         fetched_bytes: Arc<AtomicU64>,
         file_id: i64,
@@ -187,18 +202,6 @@ impl SessionTable {
         chunk_count: usize,
         user_agent: Option<String>,
     ) -> anyhow::Result<Option<Bytes>> {
-        if let Ok(Some(sha)) = metadata.is_chunk_linked(file_id, chunk_idx as usize) {
-            if let Ok(data) = backend.get(&sha).await {
-                tracing::info!(
-                    "[f{}] chunk {}/{} already cached, skipping",
-                    file_id,
-                    chunk_idx + 1,
-                    chunk_count
-                );
-                return Ok(Some(Bytes::from(data)));
-            }
-        }
-
         let range_header = format!("bytes={}-{}", start, end);
         let mut req = client.get(&url).header("Range", &range_header);
         if let Some(ref ua) = user_agent {
@@ -228,8 +231,14 @@ impl SessionTable {
         };
 
         let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
-        metadata.ensure_chunk(&sha256, "local", &path, data.len() as i64, stored_size)?;
-        metadata.link_file_chunk(file_id, &sha256, chunk_idx, data.len() as i64)?;
+        let _ = event_tx.send(ChunkStoredEvent {
+            sha256: sha256.clone(),
+            path,
+            data_len: data.len() as i64,
+            stored_size,
+            file_id,
+            chunk_idx,
+        });
 
         tracing::info!(
             "[f{}] chunk {}/{} done ({} bytes)",
@@ -248,31 +257,26 @@ impl SessionTable {
 pub struct FileDownloadSessionConfig {
     pub file_id: i64,
     pub name: String,
-    pub repo: String,
     pub url: String,
     pub total_size: u64,
-    pub source: String,
     pub chunk_count: usize,
     pub user_agent: Option<String>,
     pub prefetch_budget_base: usize,
+    pub cached_chunks: StdMutex<std::collections::HashMap<usize, String>>,
+    pub file: File,
 }
 
 pub struct FileDownloadSessionDeps {
     pub session_table: Arc<SessionTable>,
-    pub metadata: Arc<MetadataStore>,
-    pub backend: Arc<dyn StorageBackend>,
-    pub head_client: reqwest::Client,
     pub served_bytes: Arc<AtomicU64>,
 }
 
 pub struct FileDownloadSession {
     file_id: i64,
     name: String,
-    repo: String,
     url: String,
     total_size: u64,
     chunk_count: usize,
-    source: String,
     user_agent: Option<String>,
 
     subscriber_count: AtomicUsize,
@@ -280,11 +284,10 @@ pub struct FileDownloadSession {
     inflight_prefetches: StdMutex<HashSet<usize>>,
 
     session_table: Arc<SessionTable>,
-    metadata: Arc<MetadataStore>,
-    backend: Arc<dyn StorageBackend>,
-    head_client: reqwest::Client,
     served_bytes: Arc<AtomicU64>,
     prefetch_budget_base: usize,
+    cached_chunks: StdMutex<std::collections::HashMap<usize, String>>,
+    file: File,
 
     task: StdMutex<Option<JoinHandle<()>>>,
     state: AtomicU8,
@@ -297,21 +300,18 @@ impl FileDownloadSession {
         Self {
             file_id: cfg.file_id,
             name: cfg.name,
-            repo: cfg.repo,
             url: cfg.url,
             total_size: cfg.total_size,
             chunk_count: cfg.chunk_count.max(1),
-            source: cfg.source,
             user_agent: cfg.user_agent,
             subscriber_count: AtomicUsize::new(0),
             subscribers: StdMutex::new(Vec::new()),
             inflight_prefetches: StdMutex::new(HashSet::new()),
             session_table: deps.session_table,
-            metadata: deps.metadata,
-            backend: deps.backend,
-            head_client: deps.head_client,
             served_bytes: deps.served_bytes,
             prefetch_budget_base: cfg.prefetch_budget_base,
+            cached_chunks: cfg.cached_chunks,
+            file: cfg.file,
             task: StdMutex::new(None),
             state: AtomicU8::new(0),
             file_ready: AtomicBool::new(false),
@@ -353,13 +353,12 @@ impl FileDownloadSession {
         }
         self.subscriber_count.fetch_add(1, Ordering::Relaxed);
 
-        let file = self.ensure_file_metadata().await?;
-        self.signal_file_ready(file.clone(), total_size);
+        self.signal_file_ready(self.file.clone(), total_size);
 
         self.ensure_running();
 
         Ok((
-            file,
+            self.file.clone(),
             content_length,
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))
@@ -432,6 +431,7 @@ impl FileDownloadSession {
                         self.total_size,
                         self.chunk_count,
                         self.user_agent.as_deref(),
+                        &self.cached_chunks,
                     )
                     .await;
 
@@ -472,14 +472,9 @@ impl FileDownloadSession {
                         let budget =
                             prefetch_budget(self.prefetch_budget_base, active_cursors.len());
                         let per_cursor = (budget / active_cursors.len().max(1)).max(1);
-                        let mut cached_prefetches = HashSet::new();
                         for cursor in active_cursors {
                             for j in (cursor + 1)..(cursor + 1 + per_cursor).min(self.chunk_count) {
                                 if completed.contains(&j) {
-                                    continue;
-                                }
-                                if self.is_chunk_cached(j).await {
-                                    cached_prefetches.insert(j);
                                     continue;
                                 }
                                 if !self.track_prefetch(j) {
@@ -501,11 +496,12 @@ impl FileDownloadSession {
                                         self.total_size,
                                         self.chunk_count,
                                         self.user_agent.as_deref(),
+                                        &self.cached_chunks,
                                     )
                                     .await;
                             }
                         }
-                        self.finish_prefetches(&completed, &cached_prefetches);
+                        self.finish_prefetches(&completed, &HashSet::new());
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         tracing::warn!("chunk {} download closed unexpectedly", i);
@@ -523,10 +519,6 @@ impl FileDownloadSession {
             self.clean_subscribers();
         }
 
-        if let Ok(Some(f)) = self.metadata.get_file_by_name(&self.name, &self.source) {
-            self.signal_file_ready(f.clone(), f.total_size as u64);
-        }
-
         self.subscribers.lock().unwrap().clear();
 
         tracing::info!(
@@ -538,121 +530,6 @@ impl FileDownloadSession {
         );
 
         self.task.lock().unwrap().take();
-    }
-
-    async fn ensure_file_metadata(&self) -> anyhow::Result<File> {
-        if let Some(f) = self.metadata.get_file_by_name(&self.name, &self.source)? {
-            if f.x_repo_commit.is_some() && f.total_size > 0 {
-                self.signal_file_ready(f.clone(), f.total_size as u64);
-                return Ok(f);
-            }
-        }
-
-        let mut req = if crate::service::use_get_for_first_hop_probe(&self.source, &self.url) {
-            self.head_client.get(&self.url)
-        } else {
-            self.head_client.head(&self.url)
-        };
-        if let Some(ref ua) = self.user_agent {
-            req = req.header("User-Agent", ua);
-        }
-        let head_resp = req.send().await?;
-        let first_headers = head_resp.headers();
-        let status = head_resp.status();
-
-        let x_repo_commit = first_headers
-            .get("x-repo-commit")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let x_linked_size: Option<i64> = first_headers
-            .get("x-linked-size")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
-        let x_linked_etag = first_headers
-            .get("x-linked-etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let (upstream_size, etag, content_type) = if status.is_redirection() {
-            let location = first_headers
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let location = crate::server::resolve_redirect(&self.url, location);
-            let mut req2 = self.head_client.head(&location);
-            if let Some(ref ua) = self.user_agent {
-                req2 = req2.header("User-Agent", ua);
-            }
-            let resp2 = req2.send().await?;
-            let h = resp2.headers();
-            let cl: u64 = h
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            let et = h
-                .get("etag")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let ct = h
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            (cl, et, ct)
-        } else {
-            let cl: u64 = first_headers
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            let et = first_headers
-                .get("etag")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let ct = first_headers
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            (cl, et, ct)
-        };
-
-        let size = if upstream_size > 0 {
-            upstream_size
-        } else {
-            x_linked_size.unwrap_or(0) as u64
-        };
-
-        if size == 0 {
-            anyhow::bail!("cannot determine file size for {}", self.url);
-        }
-
-        self.metadata.delete_file(&self.name, &self.source)?;
-        self.metadata
-            .add_file(&self.name, &self.repo, size as i64, &self.source)?;
-        self.metadata.set_file_headers(
-            &self.name,
-            &self.source,
-            etag.as_deref(),
-            x_repo_commit.as_deref(),
-            x_linked_size,
-            x_linked_etag.as_deref(),
-            content_type.as_deref(),
-        )?;
-        self.metadata.touch_repo(&self.repo)?;
-
-        let file = self
-            .metadata
-            .get_file_by_name(&self.name, &self.source)?
-            .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?;
-        self.signal_file_ready(file.clone(), size);
-        Ok(file)
-    }
-
-    async fn is_chunk_cached(&self, i: usize) -> bool {
-        match self.metadata.is_chunk_linked(self.file_id, i) {
-            Ok(Some(sha)) => self.backend.exists(&sha).await.unwrap_or(false),
-            _ => false,
-        }
     }
 
     fn track_prefetch(&self, idx: usize) -> bool {
@@ -711,26 +588,17 @@ impl FileDownloadSession {
 pub struct FileSessionManager {
     map: DashMap<i64, Arc<FileDownloadSession>>,
     session_table: Arc<SessionTable>,
-    metadata: Arc<MetadataStore>,
-    backend: Arc<dyn StorageBackend>,
-    head_client: reqwest::Client,
     served_bytes: Arc<AtomicU64>,
 }
 
 impl FileSessionManager {
     pub fn new(
         session_table: Arc<SessionTable>,
-        metadata: Arc<MetadataStore>,
-        backend: Arc<dyn StorageBackend>,
-        head_client: reqwest::Client,
         served_bytes: Arc<AtomicU64>,
     ) -> Self {
         Self {
             map: DashMap::new(),
             session_table,
-            metadata,
-            backend,
-            head_client,
             served_bytes,
         }
     }
@@ -740,12 +608,12 @@ impl FileSessionManager {
         &self,
         file_id: i64,
         name: &str,
-        repo: &str,
         url: &str,
-        source: &str,
         total_size: u64,
         prefetch_budget_base: usize,
         user_agent: Option<&str>,
+        cached_chunks: std::collections::HashMap<usize, String>,
+        file: File,
     ) -> Arc<FileDownloadSession> {
         self.map
             .entry(file_id)
@@ -755,19 +623,16 @@ impl FileSessionManager {
                     FileDownloadSessionConfig {
                         file_id,
                         name: name.to_string(),
-                        repo: repo.to_string(),
                         url: url.to_string(),
                         total_size,
-                        source: source.to_string(),
                         chunk_count,
                         user_agent: user_agent.map(str::to_string),
                         prefetch_budget_base,
+                        cached_chunks: StdMutex::new(cached_chunks),
+                        file,
                     },
                     FileDownloadSessionDeps {
                         session_table: self.session_table.clone(),
-                        metadata: self.metadata.clone(),
-                        backend: self.backend.clone(),
-                        head_client: self.head_client.clone(),
                         served_bytes: self.served_bytes.clone(),
                     },
                 ))
@@ -784,17 +649,32 @@ impl FileSessionManager {
 mod tests {
     use super::{
         compute_active_cursors, prefetch_budget, retain_active_prefetches, select_next_chunk,
-        FileDownloadSession, FileDownloadSessionConfig, FileDownloadSessionDeps,
+        ChunkStoredEvent, FileDownloadSession, FileDownloadSessionConfig, FileDownloadSessionDeps,
     };
     use crate::config::Config;
-    use crate::metadata::MetadataStore;
-    use crate::storage::local::LocalBackend;
-    use crate::storage::Compression;
-    use std::collections::HashSet;
+    use crate::metadata::File;
+    use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicU64;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex as StdMutex};
     use tempfile::TempDir;
     use tokio::task::JoinHandle;
+
+    fn dummy_file() -> File {
+        File {
+            id: 1,
+            name: "test.bin".to_string(),
+            repo: "test/repo".to_string(),
+            total_size: crate::service::CHUNK_SIZE as i64,
+            created_at: String::new(),
+            last_accessed: String::new(),
+            source: "hf".to_string(),
+            etag: None,
+            x_repo_commit: None,
+            x_linked_size: None,
+            x_linked_etag: None,
+            content_type: None,
+        }
+    }
 
     #[test]
     fn single_subscriber_picks_smallest_incomplete_chunk() {
@@ -844,19 +724,21 @@ mod tests {
 
     #[tokio::test]
     async fn finished_session_clears_task_slot() {
-        let dir = TempDir::new().unwrap();
-        let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
-        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalBackend::new(
-            dir.path().join("chunks"),
-            Compression::None,
-        ));
+        let _dir = TempDir::new().unwrap();
         let fetched_bytes = Arc::new(AtomicU64::new(0));
         let served_bytes = Arc::new(AtomicU64::new(0));
         let client = reqwest::Client::new();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(
+            crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ),
+        );
         let session_table = Arc::new(super::SessionTable::new(
             client.clone(),
-            backend.clone(),
-            metadata.clone(),
+            backend,
+            event_tx,
             fetched_bytes,
         ));
 
@@ -864,19 +746,16 @@ mod tests {
             FileDownloadSessionConfig {
                 file_id: 1,
                 name: "test.bin".to_string(),
-                repo: "test/repo".to_string(),
                 url: "http://localhost/test.bin".to_string(),
                 total_size: crate::service::CHUNK_SIZE as u64,
-                source: "hf".to_string(),
                 chunk_count: 1,
                 user_agent: None,
                 prefetch_budget_base: 8,
+                cached_chunks: StdMutex::new(HashMap::new()),
+                file: dummy_file(),
             },
             FileDownloadSessionDeps {
                 session_table,
-                metadata,
-                backend,
-                head_client: client,
                 served_bytes,
             },
         ));
@@ -890,19 +769,21 @@ mod tests {
 
     #[tokio::test]
     async fn file_session_tracks_prefetch_state() {
-        let dir = TempDir::new().unwrap();
-        let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
-        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalBackend::new(
-            dir.path().join("chunks"),
-            Compression::None,
-        ));
+        let _dir = TempDir::new().unwrap();
         let fetched_bytes = Arc::new(AtomicU64::new(0));
         let served_bytes = Arc::new(AtomicU64::new(0));
         let client = reqwest::Client::new();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(
+            crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ),
+        );
         let session_table = Arc::new(super::SessionTable::new(
             client.clone(),
-            backend.clone(),
-            metadata.clone(),
+            backend,
+            event_tx,
             fetched_bytes,
         ));
 
@@ -910,19 +791,16 @@ mod tests {
             FileDownloadSessionConfig {
                 file_id: 1,
                 name: "test.bin".to_string(),
-                repo: "test/repo".to_string(),
                 url: "http://localhost/test.bin".to_string(),
                 total_size: crate::service::CHUNK_SIZE as u64,
-                source: "hf".to_string(),
                 chunk_count: 8,
                 user_agent: None,
                 prefetch_budget_base: 8,
+                cached_chunks: StdMutex::new(HashMap::new()),
+                file: dummy_file(),
             },
             FileDownloadSessionDeps {
                 session_table,
-                metadata,
-                backend,
-                head_client: client,
                 served_bytes,
             },
         );

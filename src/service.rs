@@ -2,7 +2,7 @@ use crate::chunker;
 use crate::metadata::{File, MetadataStore, Stats};
 use crate::storage::StorageBackend;
 use bytes::Bytes;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -54,18 +54,45 @@ impl CacheService {
         let fetched_bytes = Arc::new(AtomicU64::new(0));
         let served_bytes = Arc::new(AtomicU64::new(0));
 
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<crate::session::ChunkStoredEvent>();
+
+        let metadata_clone = metadata.clone();
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                if let Err(e) = metadata_clone.ensure_chunk(
+                    &event.sha256,
+                    "local",
+                    &event.path,
+                    event.data_len,
+                    event.stored_size,
+                ) {
+                    tracing::warn!("ensure_chunk failed for {}: {:?}", event.sha256, e);
+                }
+                if let Err(e) = metadata_clone.link_file_chunk(
+                    event.file_id,
+                    &event.sha256,
+                    event.chunk_idx,
+                    event.data_len,
+                ) {
+                    tracing::warn!(
+                        "link_file_chunk failed for file {} chunk {}: {:?}",
+                        event.file_id,
+                        event.chunk_idx,
+                        e
+                    );
+                }
+            }
+        });
+
         let session_table = Arc::new(crate::session::SessionTable::new(
             stream_client,
             backend.clone(),
-            metadata.clone(),
+            event_tx,
             fetched_bytes.clone(),
         ));
 
         let fs_manager = Arc::new(crate::session::FileSessionManager::new(
             session_table.clone(),
-            metadata.clone(),
-            backend.clone(),
-            head_client.clone(),
             served_bytes.clone(),
         ));
 
@@ -744,15 +771,21 @@ impl CacheService {
             return self.stream_small_file(url, name, &file, user_agent).await;
         }
 
+        let file_chunks = self.metadata.get_file_chunks(file.id)?;
+        let cached_chunks: HashMap<usize, String> = file_chunks
+            .iter()
+            .map(|fc| (fc.chunk_index as usize, fc.sha256.clone()))
+            .collect();
+
         let session = self.fs_manager.get_or_create(
             file.id,
             name,
-            repo,
             url,
-            source,
             total_size,
             self.prefetch_budget_base,
             user_agent,
+            cached_chunks,
+            file.clone(),
         );
         session
             .subscribe(Some((range_start.unwrap_or(0), range_end)))
