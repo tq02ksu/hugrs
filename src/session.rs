@@ -4,6 +4,7 @@ use crate::storage::StorageBackend;
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, mpsc};
@@ -25,7 +26,7 @@ fn prefetch_budget(base: usize, active_cursors: usize) -> usize {
 
 fn compute_active_cursors(
     client_ranges: &[ClientRange],
-    completed: &std::collections::HashSet<usize>,
+    completed: &HashSet<usize>,
     chunk_sz: u64,
     chunk_count: usize,
 ) -> Vec<usize> {
@@ -47,7 +48,7 @@ fn compute_active_cursors(
 
 fn select_next_chunk(
     client_ranges: &[ClientRange],
-    completed: &std::collections::HashSet<usize>,
+    completed: &HashSet<usize>,
     chunk_sz: u64,
     chunk_count: usize,
 ) -> Option<usize> {
@@ -116,7 +117,7 @@ impl SessionTable {
         total_size: u64,
         chunk_count: usize,
         user_agent: Option<&str>,
-        cached_chunks: &StdMutex<std::collections::HashMap<usize, String>>,
+        cached_chunks: &Arc<StdMutex<HashMap<usize, String>>>,
     ) -> broadcast::Receiver<Arc<Bytes>> {
         let key = (file_id, chunk_idx);
 
@@ -149,6 +150,7 @@ impl SessionTable {
         let fetched_bytes = self.fetched_bytes.clone();
         let map = self.map.clone();
         let user_agent = user_agent.map(str::to_string);
+        let cached_chunks = cached_chunks.clone();
         let task = tokio::spawn(async move {
             match Self::download_and_store(
                 client,
@@ -163,6 +165,7 @@ impl SessionTable {
                 total_size,
                 chunk_count,
                 user_agent,
+                cached_chunks,
             )
             .await
             {
@@ -201,6 +204,7 @@ impl SessionTable {
         _total_size: u64,
         chunk_count: usize,
         user_agent: Option<String>,
+        cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
     ) -> anyhow::Result<Option<Bytes>> {
         let range_header = format!("bytes={}-{}", start, end);
         let mut req = client.get(&url).header("Range", &range_header);
@@ -231,6 +235,10 @@ impl SessionTable {
         };
 
         let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
+        cached_chunks
+            .lock()
+            .unwrap()
+            .insert(chunk_idx as usize, sha256.clone());
         let _ = event_tx.send(ChunkStoredEvent {
             sha256: sha256.clone(),
             path,
@@ -262,7 +270,7 @@ pub struct FileDownloadSessionConfig {
     pub chunk_count: usize,
     pub user_agent: Option<String>,
     pub prefetch_budget_base: usize,
-    pub cached_chunks: StdMutex<std::collections::HashMap<usize, String>>,
+    pub cached_chunks: StdMutex<HashMap<usize, String>>,
     pub file: File,
 }
 
@@ -286,7 +294,7 @@ pub struct FileDownloadSession {
     session_table: Arc<SessionTable>,
     served_bytes: Arc<AtomicU64>,
     prefetch_budget_base: usize,
-    cached_chunks: StdMutex<std::collections::HashMap<usize, String>>,
+    cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
     file: File,
 
     task: StdMutex<Option<JoinHandle<()>>>,
@@ -310,7 +318,7 @@ impl FileDownloadSession {
             session_table: deps.session_table,
             served_bytes: deps.served_bytes,
             prefetch_budget_base: cfg.prefetch_budget_base,
-            cached_chunks: cfg.cached_chunks,
+            cached_chunks: Arc::new(cfg.cached_chunks),
             file: cfg.file,
             task: StdMutex::new(None),
             state: AtomicU8::new(0),
@@ -612,7 +620,7 @@ impl FileSessionManager {
         total_size: u64,
         prefetch_budget_base: usize,
         user_agent: Option<&str>,
-        cached_chunks: std::collections::HashMap<usize, String>,
+        cached_chunks: HashMap<usize, String>,
         file: File,
     ) -> Arc<FileDownloadSession> {
         self.map
