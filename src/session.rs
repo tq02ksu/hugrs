@@ -156,7 +156,7 @@ impl SessionTable {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::warn!("chunk {} download failed: {}", chunk_idx, e);
+                    tracing::warn!("chunk {} download failed: {:?}", chunk_idx, e);
                 }
             }
             map.remove(&key);

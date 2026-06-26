@@ -408,6 +408,23 @@ impl Config {
             config.modelscope.connect_timeout_secs = v;
         }
 
+        if config.storage.backend == "local" {
+            let root = &config.storage.local_root;
+            if !root.exists() {
+                if let Some(parent) = root.parent() {
+                    let legacy = parent.join("trunks");
+                    if legacy.exists() {
+                        tracing::info!(
+                            "Migrating legacy trunks dir: {} -> {}",
+                            legacy.display(),
+                            root.display()
+                        );
+                        std::fs::rename(&legacy, root)?;
+                    }
+                }
+            }
+        }
+
         Ok(config)
     }
 }
