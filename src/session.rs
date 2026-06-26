@@ -3,8 +3,8 @@ use crate::metadata::File;
 use crate::storage::StorageBackend;
 use bytes::Bytes;
 use dashmap::DashMap;
-use std::collections::HashSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, mpsc};
@@ -600,10 +600,7 @@ pub struct FileSessionManager {
 }
 
 impl FileSessionManager {
-    pub fn new(
-        session_table: Arc<SessionTable>,
-        served_bytes: Arc<AtomicU64>,
-    ) -> Self {
+    pub fn new(session_table: Arc<SessionTable>, served_bytes: Arc<AtomicU64>) -> Self {
         Self {
             map: DashMap::new(),
             session_table,
@@ -737,12 +734,11 @@ mod tests {
         let served_bytes = Arc::new(AtomicU64::new(0));
         let client = reqwest::Client::new();
         let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
-        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(
-            crate::storage::local::LocalBackend::new(
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
                 _dir.path().join("chunks"),
                 crate::storage::Compression::None,
-            ),
-        );
+            ));
         let session_table = Arc::new(super::SessionTable::new(
             client.clone(),
             backend,
@@ -782,12 +778,11 @@ mod tests {
         let served_bytes = Arc::new(AtomicU64::new(0));
         let client = reqwest::Client::new();
         let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
-        let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(
-            crate::storage::local::LocalBackend::new(
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
                 _dir.path().join("chunks"),
                 crate::storage::Compression::None,
-            ),
-        );
+            ));
         let session_table = Arc::new(super::SessionTable::new(
             client.clone(),
             backend,

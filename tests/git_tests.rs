@@ -348,9 +348,13 @@ fn test_rewrite_lfs_urls_huggingface_co() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -379,9 +383,13 @@ fn test_rewrite_lfs_urls_modelscope_cn() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "ms")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "ms",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -410,9 +418,13 @@ fn test_rewrite_lfs_urls_www_modelscope_cn() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "ms")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "ms",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -441,9 +453,13 @@ fn test_rewrite_lfs_urls_hf_mirror() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -472,9 +488,13 @@ fn test_rewrite_lfs_urls_cdn_lfs() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -500,9 +520,13 @@ fn test_rewrite_lfs_urls_cdn_lfs_us1() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -528,9 +552,13 @@ fn test_rewrite_lfs_urls_lfs_domain() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -555,9 +583,13 @@ fn test_rewrite_lfs_urls_no_download_action() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let upload_href = v["objects"][0]["actions"]["upload"]["href"]
@@ -583,9 +615,13 @@ fn test_rewrite_lfs_urls_unrecognized_domain_unchanged() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href = v["objects"][0]["actions"]["download"]["href"]
@@ -597,9 +633,13 @@ fn test_rewrite_lfs_urls_unrecognized_domain_unchanged() {
 #[test]
 fn test_rewrite_lfs_urls_empty_objects() {
     let body = json!({"objects": []}).to_string();
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
     assert_eq!(rewritten, body);
 }
 
@@ -631,9 +671,13 @@ fn test_rewrite_lfs_urls_multiple_objects() {
     })
     .to_string();
 
-    let rewritten =
-        hugrs::git::rewrite_lfs_urls(&body, "http://127.0.0.1:3000", "https://huggingface.co", "hf")
-            .unwrap();
+    let rewritten = hugrs::git::rewrite_lfs_urls(
+        &body,
+        "http://127.0.0.1:3000",
+        "https://huggingface.co",
+        "hf",
+    )
+    .unwrap();
 
     let v: serde_json::Value = serde_json::from_str(&rewritten).unwrap();
     let href1 = v["objects"][0]["actions"]["download"]["href"]

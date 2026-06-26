@@ -54,7 +54,8 @@ impl CacheService {
         let fetched_bytes = Arc::new(AtomicU64::new(0));
         let served_bytes = Arc::new(AtomicU64::new(0));
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<crate::session::ChunkStoredEvent>();
+        let (event_tx, mut event_rx) =
+            mpsc::unbounded_channel::<crate::session::ChunkStoredEvent>();
 
         let metadata_clone = metadata.clone();
         tokio::spawn(async move {

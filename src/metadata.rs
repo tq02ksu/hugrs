@@ -405,6 +405,4 @@ impl MetadataStore {
             served_bytes: 0,
         })
     }
-
-
 }
