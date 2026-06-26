@@ -15,13 +15,13 @@ impl LocalBackend {
         Self { root, compression }
     }
 
-    fn trunk_path(&self, sha256: &str) -> PathBuf {
+    fn chunk_path(&self, sha256: &str) -> PathBuf {
         let dir = self.root.join(&sha256[0..2]).join(&sha256[2..4]);
         dir.join(sha256)
     }
 
     fn compressed_path(&self, sha256: &str) -> PathBuf {
-        let mut p = self.trunk_path(sha256);
+        let mut p = self.chunk_path(sha256);
         p.as_mut_os_string().push(".zst");
         p
     }
@@ -30,7 +30,7 @@ impl LocalBackend {
 #[async_trait]
 impl StorageBackend for LocalBackend {
     async fn put(&self, sha256: &str, data: &[u8]) -> anyhow::Result<u64> {
-        let path = self.trunk_path(sha256);
+        let path = self.chunk_path(sha256);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -54,12 +54,12 @@ impl StorageBackend for LocalBackend {
                 return Ok(zstd::decode_all(&compressed[..])?);
             }
         }
-        let path = self.trunk_path(sha256);
+        let path = self.chunk_path(sha256);
         Ok(tokio::fs::read(&path).await?)
     }
 
     async fn exists(&self, sha256: &str) -> anyhow::Result<bool> {
-        let path = self.trunk_path(sha256);
+        let path = self.chunk_path(sha256);
         if tokio::fs::metadata(&path).await.is_ok() {
             return Ok(true);
         }
@@ -73,7 +73,7 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn delete(&self, sha256: &str) -> anyhow::Result<()> {
-        let path = self.trunk_path(sha256);
+        let path = self.chunk_path(sha256);
         if tokio::fs::metadata(&path).await.is_ok() {
             tokio::fs::remove_file(&path).await?;
         }

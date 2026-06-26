@@ -124,7 +124,7 @@ fn default_cache_base() -> PathBuf {
 }
 
 fn default_local_root() -> PathBuf {
-    default_cache_base().join("hugrs").join("trunks")
+    default_cache_base().join("hugrs").join("chunks")
 }
 fn default_db_path() -> PathBuf {
     default_cache_base().join("hugrs").join("hugrs.db")

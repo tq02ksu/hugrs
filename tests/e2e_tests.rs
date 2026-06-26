@@ -220,7 +220,7 @@ async fn start_ms_upstream(data: Vec<u8>) -> (String, MockState) {
 fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
     let metadata = Arc::new(MetadataStore::new(&dir.path().join(db_name)).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let http = reqwest::Client::new();
@@ -254,7 +254,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
         },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
-            local_root: dir.path().join("trunks"),
+            local_root: dir.path().join("chunks"),
             s3_bucket: None,
             s3_region: None,
             s3_prefix: None,

@@ -101,7 +101,7 @@ async fn test_multiple_gets_no_duplicate_downloads() {
     let dir = TempDir::new().unwrap();
     let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
 
@@ -222,7 +222,7 @@ async fn test_partial_cache_no_redundant_download() {
     let dir = TempDir::new().unwrap();
     let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
 
@@ -268,7 +268,7 @@ async fn test_partial_cache_no_redundant_download() {
     let path = format!("{}/{}/{}", &sha[0..2], &sha[2..4], sha);
     backend.put(&sha, first_chunk_data).await.unwrap();
     metadata
-        .ensure_trunk(
+        .ensure_chunk(
             &sha,
             "local",
             &path,
@@ -277,7 +277,7 @@ async fn test_partial_cache_no_redundant_download() {
         )
         .unwrap();
     metadata
-        .link_file_trunk(file.id, &sha, 0, first_chunk_data.len() as i64)
+        .link_file_chunk(file.id, &sha, 0, first_chunk_data.len() as i64)
         .unwrap();
 
     // Now call stream_from_upstream - should only download chunks 1 and 2
@@ -342,7 +342,7 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
     let dir = TempDir::new().unwrap();
     let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
 

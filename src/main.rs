@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
                 let stats = service.stats().await?;
                 println!("Repos:             {}", stats.repo_count);
                 println!("Files:             {}", stats.file_count);
-                println!("Trunks:            {}", stats.trunk_count);
+                println!("Chunks:            {}", stats.chunk_count);
                 println!("Total size:        {} bytes", stats.total_size);
                 println!("Unique size:       {} bytes", stats.unique_size);
                 println!("Compression ratio: {:.2}%", stats.compression_ratio * 100.0);
@@ -144,7 +144,7 @@ fn main() -> anyhow::Result<()> {
 
             Command::Gc => {
                 let count = service.gc().await?;
-                tracing::info!("Garbage collected {} trunks", count);
+                tracing::info!("Garbage collected {} chunks", count);
                 if let Some(limit) = config.storage.max_size {
                     let stats = service.stats().await?;
                     if stats.total_size as u64 > limit {

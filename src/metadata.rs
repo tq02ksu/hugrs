@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection};
+use rusqlite_migration::{Migrations, M};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -19,7 +20,7 @@ pub struct File {
 }
 
 #[derive(Debug, Clone)]
-pub struct Trunk {
+pub struct Chunk {
     pub sha256: String,
     pub backend: String,
     pub path: String,
@@ -29,7 +30,7 @@ pub struct Trunk {
 }
 
 #[derive(Debug, Clone)]
-pub struct FileTrunk {
+pub struct FileChunk {
     pub file_id: i64,
     pub sha256: String,
     pub chunk_index: i64,
@@ -40,7 +41,7 @@ pub struct FileTrunk {
 pub struct Stats {
     pub repo_count: i64,
     pub file_count: i64,
-    pub trunk_count: i64,
+    pub chunk_count: i64,
     pub total_size: i64,
     pub unique_size: i64,
     pub compression_ratio: f64,
@@ -71,84 +72,86 @@ impl MetadataStore {
     }
 
     fn init_schema(&self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS files (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                name          TEXT NOT NULL,
-                repo          TEXT NOT NULL DEFAULT '',
-                total_size    INTEGER NOT NULL,
-                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-                last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
-                source        TEXT NOT NULL,
-                UNIQUE(name, source)
-            );
+        let mut conn = self.conn.lock().unwrap();
 
-            CREATE TABLE IF NOT EXISTS trunks (
-                sha256    TEXT PRIMARY KEY,
-                backend   TEXT NOT NULL,
-                path      TEXT NOT NULL,
-                size      INTEGER NOT NULL,
-                ref_count INTEGER NOT NULL DEFAULT 0
-            );
+        Self::run_legacy_migrations(&conn)?;
 
-            CREATE TABLE IF NOT EXISTS file_trunks (
-                file_id      INTEGER NOT NULL REFERENCES files(id),
-                sha256       TEXT NOT NULL REFERENCES trunks(sha256),
-                chunk_index  INTEGER NOT NULL,
-                chunk_size   INTEGER NOT NULL,
-                PRIMARY KEY (file_id, chunk_index)
-            );
+        let migrations = Migrations::new(vec![
+            M::up(
+                "CREATE TABLE IF NOT EXISTS files (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT NOT NULL,
+                    repo          TEXT NOT NULL DEFAULT '',
+                    total_size    INTEGER NOT NULL,
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                    last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
+                    source        TEXT NOT NULL,
+                    etag          TEXT,
+                    x_repo_commit TEXT,
+                    x_linked_size INTEGER,
+                    x_linked_etag TEXT,
+                    content_type  TEXT,
+                    UNIQUE(name, source)
+                );
+                CREATE TABLE IF NOT EXISTS trunks (
+                    sha256           TEXT PRIMARY KEY,
+                    backend          TEXT NOT NULL,
+                    path             TEXT NOT NULL,
+                    size             INTEGER NOT NULL,
+                    compressed_size  INTEGER,
+                    ref_count        INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS file_trunks (
+                    file_id      INTEGER NOT NULL REFERENCES files(id),
+                    sha256       TEXT NOT NULL REFERENCES trunks(sha256),
+                    chunk_index  INTEGER NOT NULL,
+                    chunk_size   INTEGER NOT NULL,
+                    PRIMARY KEY (file_id, chunk_index)
+                );
+                CREATE TABLE IF NOT EXISTS http_cache (
+                    url        TEXT PRIMARY KEY,
+                    status     INTEGER NOT NULL,
+                    headers    TEXT NOT NULL,
+                    body       BLOB NOT NULL,
+                    cached_at  TEXT NOT NULL DEFAULT (datetime('now'))
+                );",
+            ),
+            M::up(
+                "ALTER TABLE trunks RENAME TO chunks;
+                 ALTER TABLE file_trunks RENAME TO file_chunks;",
+            ),
+        ]);
 
-            CREATE TABLE IF NOT EXISTS http_cache (
-                url        TEXT PRIMARY KEY,
-                status     INTEGER NOT NULL,
-                headers    TEXT NOT NULL,
-                body       BLOB NOT NULL,
-                cached_at  TEXT NOT NULL DEFAULT (datetime('now'))
-            );",
-        )?;
-        // Migration: add repo column if upgrading from older schema
-        let has_repo: bool = conn.prepare("SELECT repo FROM files LIMIT 0").is_ok();
-        if !has_repo {
-            conn.execute_batch("ALTER TABLE files ADD COLUMN repo TEXT NOT NULL DEFAULT ''")?;
+        migrations.to_latest(&mut *conn)?;
+
+        Ok(())
+    }
+
+    fn run_legacy_migrations(conn: &Connection) -> anyhow::Result<()> {
+        let has_files = conn.prepare("SELECT name FROM files LIMIT 0").is_ok();
+        if !has_files {
+            return Ok(());
         }
-        let has_etag: bool = conn.prepare("SELECT etag FROM files LIMIT 0").is_ok();
-        if !has_etag {
-            conn.execute_batch("ALTER TABLE files ADD COLUMN etag TEXT")?;
+        let legacy_cols = [
+            ("repo", "TEXT NOT NULL DEFAULT ''"),
+            ("source", "TEXT NOT NULL DEFAULT 'hf'"),
+            ("etag", "TEXT"),
+            ("x_repo_commit", "TEXT"),
+            ("x_linked_size", "INTEGER"),
+            ("x_linked_etag", "TEXT"),
+            ("content_type", "TEXT"),
+        ];
+        for (col, def) in &legacy_cols {
+            let exists = conn
+                .prepare(&format!("SELECT {} FROM files LIMIT 0", col))
+                .is_ok();
+            if !exists {
+                let _ =
+                    conn.execute_batch(&format!("ALTER TABLE files ADD COLUMN {} {}", col, def));
+            }
         }
-        let has_x_repo_commit: bool = conn
-            .prepare("SELECT x_repo_commit FROM files LIMIT 0")
-            .is_ok();
-        if !has_x_repo_commit {
-            conn.execute_batch("ALTER TABLE files ADD COLUMN x_repo_commit TEXT")?;
-        }
-        let has_x_linked_size: bool = conn
-            .prepare("SELECT x_linked_size FROM files LIMIT 0")
-            .is_ok();
-        if !has_x_linked_size {
-            conn.execute_batch("ALTER TABLE files ADD COLUMN x_linked_size INTEGER")?;
-        }
-        let has_x_linked_etag: bool = conn
-            .prepare("SELECT x_linked_etag FROM files LIMIT 0")
-            .is_ok();
-        if !has_x_linked_etag {
-            conn.execute_batch("ALTER TABLE files ADD COLUMN x_linked_etag TEXT")?;
-        }
-        let has_content_type: bool = conn
-            .prepare("SELECT content_type FROM files LIMIT 0")
-            .is_ok();
-        if !has_content_type {
-            conn.execute_batch("ALTER TABLE files ADD COLUMN content_type TEXT")?;
-        }
-        let has_compressed_size: bool = conn
-            .prepare("SELECT compressed_size FROM trunks LIMIT 0")
-            .is_ok();
-        if !has_compressed_size {
-            conn.execute_batch("ALTER TABLE trunks ADD COLUMN compressed_size INTEGER")?;
-        }
-        // Migration: change UNIQUE(name) to UNIQUE(name, source) for ModelScope support
-        let needs_migration: bool = conn
+
+        let needs_source_migration: bool = conn
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='files'",
                 [],
@@ -158,11 +161,11 @@ impl MetadataStore {
                 },
             )
             .unwrap_or(false);
-        if needs_migration {
+
+        if needs_source_migration {
             conn.execute_batch("PRAGMA foreign_keys = OFF")?;
             conn.execute_batch(
-                "DROP TABLE IF EXISTS files_new;
-                CREATE TABLE files_new (
+                "CREATE TABLE IF NOT EXISTS files_mig (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     name          TEXT NOT NULL,
                     repo          TEXT NOT NULL DEFAULT '',
@@ -177,13 +180,28 @@ impl MetadataStore {
                     content_type  TEXT,
                     UNIQUE(name, source)
                 );
-                INSERT INTO files_new (id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type)
-                    SELECT id, name, repo, total_size, created_at, last_accessed, CASE WHEN source IN ('pull', 'upload') THEN 'hf' ELSE source END, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files;
+                INSERT OR IGNORE INTO files_mig (id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type)
+                    SELECT id, name, repo, total_size, created_at, last_accessed,
+                           CASE WHEN source IN ('pull', 'upload') THEN 'hf' ELSE source END,
+                           etag, x_repo_commit, x_linked_size, x_linked_etag, content_type
+                    FROM files;
                 DROP TABLE files;
-                ALTER TABLE files_new RENAME TO files;"
-            )?;
+                ALTER TABLE files_mig RENAME TO files;
+            ")?;
             conn.execute_batch("PRAGMA foreign_keys = ON")?;
         }
+
+        if conn
+            .prepare("SELECT compressed_size FROM trunks LIMIT 0")
+            .is_ok()
+            || conn
+                .prepare("SELECT compressed_size FROM chunks LIMIT 0")
+                .is_ok()
+        {
+        } else if conn.prepare("SELECT 1 FROM trunks LIMIT 0").is_ok() {
+            let _ = conn.execute_batch("ALTER TABLE trunks ADD COLUMN compressed_size INTEGER");
+        }
+
         Ok(())
     }
 
@@ -288,19 +306,19 @@ impl MetadataStore {
     }
 
     fn delete_file_by_id_internal(conn: &Connection, file_id: i64) -> anyhow::Result<()> {
-        let mut stmt = conn.prepare("SELECT sha256 FROM file_trunks WHERE file_id = ?1")?;
-        let trunks: Vec<String> = stmt
+        let mut stmt = conn.prepare("SELECT sha256 FROM file_chunks WHERE file_id = ?1")?;
+        let chunks: Vec<String> = stmt
             .query_map(params![file_id], |row| row.get::<_, String>(0))?
             .filter_map(|r| r.ok())
             .collect();
-        for sha256 in &trunks {
+        for sha256 in &chunks {
             conn.execute(
-                "UPDATE trunks SET ref_count = ref_count - 1 WHERE sha256 = ?1",
+                "UPDATE chunks SET ref_count = ref_count - 1 WHERE sha256 = ?1",
                 params![sha256],
             )?;
         }
         conn.execute(
-            "DELETE FROM file_trunks WHERE file_id = ?1",
+            "DELETE FROM file_chunks WHERE file_id = ?1",
             params![file_id],
         )?;
         conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
@@ -338,7 +356,7 @@ impl MetadataStore {
         Ok(result)
     }
 
-    pub fn ensure_trunk(
+    pub fn ensure_chunk(
         &self,
         sha256: &str,
         backend: &str,
@@ -348,19 +366,19 @@ impl MetadataStore {
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO trunks (sha256, backend, path, size, compressed_size) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO chunks (sha256, backend, path, size, compressed_size) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![sha256, backend, path, size, compressed_size],
         )?;
         Ok(())
     }
 
-    pub fn get_trunk(&self, sha256: &str) -> anyhow::Result<Option<Trunk>> {
+    pub fn get_chunk(&self, sha256: &str) -> anyhow::Result<Option<Chunk>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT sha256, backend, path, size, compressed_size, ref_count FROM trunks WHERE sha256 = ?1",
+            "SELECT sha256, backend, path, size, compressed_size, ref_count FROM chunks WHERE sha256 = ?1",
         )?;
         let mut rows = stmt.query_map(params![sha256], |row| {
-            Ok(Trunk {
+            Ok(Chunk {
                 sha256: row.get(0)?,
                 backend: row.get(1)?,
                 path: row.get(2)?,
@@ -372,7 +390,7 @@ impl MetadataStore {
         Ok(rows.next().transpose()?)
     }
 
-    pub fn link_file_trunk(
+    pub fn link_file_chunk(
         &self,
         file_id: i64,
         sha256: &str,
@@ -381,23 +399,23 @@ impl MetadataStore {
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO file_trunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR IGNORE INTO file_chunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
             params![file_id, sha256, chunk_index, chunk_size],
         )?;
         conn.execute(
-            "UPDATE trunks SET ref_count = ref_count + 1 WHERE sha256 = ?1",
+            "UPDATE chunks SET ref_count = ref_count + 1 WHERE sha256 = ?1",
             params![sha256],
         )?;
         Ok(())
     }
 
-    pub fn get_file_trunks(&self, file_id: i64) -> anyhow::Result<Vec<FileTrunk>> {
+    pub fn get_file_chunks(&self, file_id: i64) -> anyhow::Result<Vec<FileChunk>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT file_id, sha256, chunk_index, chunk_size FROM file_trunks WHERE file_id = ?1 ORDER BY chunk_index",
+            "SELECT file_id, sha256, chunk_index, chunk_size FROM file_chunks WHERE file_id = ?1 ORDER BY chunk_index",
         )?;
         let rows = stmt.query_map(params![file_id], |row| {
-            Ok(FileTrunk {
+            Ok(FileChunk {
                 file_id: row.get(0)?,
                 sha256: row.get(1)?,
                 chunk_index: row.get(2)?,
@@ -418,7 +436,7 @@ impl MetadataStore {
     ) -> anyhow::Result<Option<String>> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT sha256 FROM file_trunks WHERE file_id = ?1 AND chunk_index = ?2",
+            "SELECT sha256 FROM file_chunks WHERE file_id = ?1 AND chunk_index = ?2",
             params![file_id, chunk_index as i64],
             |row| row.get(0),
         );
@@ -457,9 +475,9 @@ impl MetadataStore {
         Ok(result)
     }
 
-    pub fn get_orphan_trunks(&self) -> anyhow::Result<Vec<String>> {
+    pub fn get_orphan_chunks(&self) -> anyhow::Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT sha256 FROM trunks WHERE ref_count = 0")?;
+        let mut stmt = conn.prepare("SELECT sha256 FROM chunks WHERE ref_count = 0")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut result = Vec::new();
         for row in rows {
@@ -475,15 +493,15 @@ impl MetadataStore {
             conn.query_row("SELECT COUNT(DISTINCT repo) FROM files", [], |row| {
                 row.get(0)
             })?;
-        let trunk_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM trunks", [], |row| row.get(0))?;
+        let chunk_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
         let total_size: i64 = conn.query_row(
             "SELECT COALESCE(SUM(total_size), 0) FROM files",
             [],
             |row| row.get(0),
         )?;
         let unique_size: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(COALESCE(compressed_size, size)), 0) FROM trunks",
+            "SELECT COALESCE(SUM(COALESCE(compressed_size, size)), 0) FROM chunks",
             [],
             |row| row.get(0),
         )?;
@@ -495,7 +513,7 @@ impl MetadataStore {
         Ok(Stats {
             repo_count,
             file_count,
-            trunk_count,
+            chunk_count,
             total_size,
             unique_size,
             compression_ratio,

@@ -106,8 +106,8 @@ impl CacheService {
                 chunk.chunk_size as i64
             };
 
-            let path = self.trunk_path(&chunk.sha256);
-            self.metadata.ensure_trunk(
+            let path = self.chunk_path(&chunk.sha256);
+            self.metadata.ensure_chunk(
                 &chunk.sha256,
                 "local",
                 &path,
@@ -115,7 +115,7 @@ impl CacheService {
                 stored_size,
             )?;
 
-            self.metadata.link_file_trunk(
+            self.metadata.link_file_chunk(
                 file.id,
                 &chunk.sha256,
                 chunk.chunk_index as i64,
@@ -243,9 +243,9 @@ impl CacheService {
                         .add_file(name, repo, total_size as i64, source)?;
                     (file.id, HashSet::new())
                 } else {
-                    let trunks = self.metadata.get_file_trunks(existing.id)?;
+                    let file_chunks = self.metadata.get_file_chunks(existing.id)?;
                     let completed: HashSet<usize> =
-                        trunks.iter().map(|t| t.chunk_index as usize).collect();
+                        file_chunks.iter().map(|t| t.chunk_index as usize).collect();
                     (existing.id, completed)
                 }
             }
@@ -328,8 +328,8 @@ impl CacheService {
                 chunk.size as i64
             };
 
-            let path = self.trunk_path(&chunk.sha256);
-            self.metadata.ensure_trunk(
+            let path = self.chunk_path(&chunk.sha256);
+            self.metadata.ensure_chunk(
                 &chunk.sha256,
                 "local",
                 &path,
@@ -337,7 +337,7 @@ impl CacheService {
                 stored_size,
             )?;
 
-            self.metadata.link_file_trunk(
+            self.metadata.link_file_chunk(
                 file_id,
                 &chunk.sha256,
                 chunk.index as i64,
@@ -383,10 +383,10 @@ impl CacheService {
         let repo = file.repo.clone();
         self.metadata.touch_repo(&repo)?;
 
-        let trunks = self.metadata.get_file_trunks(file.id)?;
+        let file_chunks = self.metadata.get_file_chunks(file.id)?;
         let mut chunks = Vec::new();
 
-        for ft in &trunks {
+        for ft in &file_chunks {
             let data = self.backend.get(&ft.sha256).await?;
             let actual_hash = chunker::sha256_hex(&data);
             if actual_hash != ft.sha256 {
@@ -412,13 +412,13 @@ impl CacheService {
             None => return Ok(false),
         };
 
-        let trunks = self.metadata.get_file_trunks(file.id)?;
+        let chunks = self.metadata.get_file_chunks(file.id)?;
         let expected = (file.total_size as usize).div_ceil(CHUNK_SIZE);
-        if trunks.len() != expected {
+        if chunks.len() != expected {
             return Ok(false);
         }
 
-        for (i, ft) in trunks.iter().enumerate() {
+        for (i, ft) in chunks.iter().enumerate() {
             if ft.chunk_index != i as i64 {
                 return Ok(false);
             }
@@ -480,7 +480,7 @@ impl CacheService {
     }
 
     pub async fn gc(&self) -> anyhow::Result<usize> {
-        let orphans = self.metadata.get_orphan_trunks()?;
+        let orphans = self.metadata.get_orphan_chunks()?;
         let count = orphans.len();
         for sha256 in &orphans {
             self.backend.delete(sha256).await?;
@@ -509,7 +509,7 @@ impl CacheService {
                 stats.total_size
             );
 
-            let orphans = self.metadata.get_orphan_trunks()?;
+            let orphans = self.metadata.get_orphan_chunks()?;
             for sha256 in &orphans {
                 self.backend.delete(sha256).await?;
             }
@@ -517,7 +517,7 @@ impl CacheService {
         Ok(())
     }
 
-    fn trunk_path(&self, sha256: &str) -> String {
+    fn chunk_path(&self, sha256: &str) -> String {
         format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256)
     }
 
@@ -570,13 +570,13 @@ impl CacheService {
         }
 
         let content_length = end - start + 1;
-        let trunks = self.metadata.get_file_trunks(file.id)?;
+        let file_chunks = self.metadata.get_file_chunks(file.id)?;
         let chunk_size_u64 = CHUNK_SIZE as u64;
         let first_chunk = (start / chunk_size_u64) as usize;
-        let last_chunk = ((end / chunk_size_u64) as usize).min(trunks.len().saturating_sub(1));
+        let last_chunk = ((end / chunk_size_u64) as usize).min(file_chunks.len().saturating_sub(1));
 
         let backend = self.backend.clone();
-        let relevant: Vec<_> = trunks[first_chunk..=last_chunk].to_vec();
+        let relevant: Vec<_> = file_chunks[first_chunk..=last_chunk].to_vec();
 
         let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 

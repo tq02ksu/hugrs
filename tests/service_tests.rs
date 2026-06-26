@@ -11,7 +11,7 @@ async fn test_upload_and_download() {
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let service = CacheService::new(
@@ -50,7 +50,7 @@ async fn test_delete_and_gc() {
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let service = CacheService::new(
@@ -84,7 +84,7 @@ async fn test_stats() {
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let service = CacheService::new(
@@ -118,7 +118,7 @@ async fn test_upload_duplicate_file_overwrites() {
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let service = CacheService::new(
@@ -152,7 +152,7 @@ async fn test_lru_eviction() {
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let service = CacheService::new(
@@ -188,7 +188,7 @@ async fn test_lru_eviction_by_repo() {
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let service = CacheService::new(

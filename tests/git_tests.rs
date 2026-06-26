@@ -118,7 +118,7 @@ async fn start_git_upstream(lfs_response: String) -> (String, MockGitState) {
 fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
     let metadata = Arc::new(MetadataStore::new(&dir.path().join(db_name)).unwrap());
     let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("trunks"),
+        dir.path().join("chunks"),
         Compression::None,
     ));
     let http = reqwest::Client::new();
@@ -153,7 +153,7 @@ fn build_git_router(upstream: &str, ms_upstream: Option<&str>, dir: &TempDir) ->
         },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
-            local_root: dir.path().join("trunks"),
+            local_root: dir.path().join("chunks"),
             s3_bucket: None,
             s3_region: None,
             s3_prefix: None,
@@ -265,7 +265,7 @@ fn build_git_router_with_token(
         },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
-            local_root: dir.path().join("trunks"),
+            local_root: dir.path().join("chunks"),
             s3_bucket: None,
             s3_region: None,
             s3_prefix: None,
@@ -1084,7 +1084,7 @@ async fn test_git_info_refs_ms_uses_separate_upstream() {
         },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
-            local_root: dir.path().join("trunks"),
+            local_root: dir.path().join("chunks"),
             s3_bucket: None,
             s3_region: None,
             s3_prefix: None,

@@ -65,15 +65,15 @@ fn retain_active_prefetches(
     inflight_prefetches.len()
 }
 
-// ── TrunkSession ──────────────────────────────────────────────
+// ── ChunkSession ──────────────────────────────────────────────
 
-pub struct TrunkSession {
+pub struct ChunkSession {
     pub tx: broadcast::Sender<Arc<Bytes>>,
     _task: JoinHandle<()>,
 }
 
 pub struct SessionTable {
-    map: Arc<DashMap<(i64, i64), Arc<TrunkSession>>>,
+    map: Arc<DashMap<(i64, i64), Arc<ChunkSession>>>,
     http_client: reqwest::Client,
     backend: Arc<dyn StorageBackend>,
     metadata: Arc<MetadataStore>,
@@ -164,7 +164,7 @@ impl SessionTable {
 
         self.map.insert(
             key,
-            Arc::new(TrunkSession {
+            Arc::new(ChunkSession {
                 tx: tx2,
                 _task: task,
             }),
@@ -228,8 +228,8 @@ impl SessionTable {
         };
 
         let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
-        metadata.ensure_trunk(&sha256, "local", &path, data.len() as i64, stored_size)?;
-        metadata.link_file_trunk(file_id, &sha256, chunk_idx, data.len() as i64)?;
+        metadata.ensure_chunk(&sha256, "local", &path, data.len() as i64, stored_size)?;
+        metadata.link_file_chunk(file_id, &sha256, chunk_idx, data.len() as i64)?;
 
         tracing::info!(
             "[f{}] chunk {}/{} done ({} bytes)",
@@ -380,7 +380,7 @@ impl FileDownloadSession {
         let session_start = std::time::Instant::now();
 
         tracing::info!(
-            "[f{}] {}: session started, {} trunks total",
+            "[f{}] {}: session started, {} chunks total",
             self.file_id,
             self.name,
             self.chunk_count,
@@ -420,7 +420,7 @@ impl FileDownloadSession {
                 let start = (i * CHUNK_SIZE) as u64;
                 let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
 
-                let trunk_start = std::time::Instant::now();
+                let chunk_start = std::time::Instant::now();
                 let mut rx = self
                     .session_table
                     .subscribe(
@@ -437,7 +437,7 @@ impl FileDownloadSession {
 
                 match rx.recv().await {
                     Ok(data) => {
-                        let elapsed_ms = trunk_start.elapsed().as_millis();
+                        let elapsed_ms = chunk_start.elapsed().as_millis();
                         let chunk_start = i as u64 * chunk_sz;
                         self.forward_chunk(chunk_start, &data).await;
                         self.served_bytes
@@ -447,7 +447,7 @@ impl FileDownloadSession {
                         let active_prefetches = self.finish_prefetches(&completed, &HashSet::new());
 
                         tracing::info!(
-                            "[f{}] {} trunk {}/{}: {} bytes in {}ms, prefetch_active={}",
+                            "[f{}] {} chunk {}/{}: {} bytes in {}ms, prefetch_active={}",
                             self.file_id,
                             self.name,
                             i + 1,
@@ -458,7 +458,7 @@ impl FileDownloadSession {
                         );
                         if elapsed_ms > 5_000 {
                             tracing::warn!(
-                                "[f{}] {} trunk {}/{}: SLOW — {} bytes in {}ms, prefetch_active={}",
+                                "[f{}] {} chunk {}/{}: SLOW — {} bytes in {}ms, prefetch_active={}",
                                 self.file_id,
                                 self.name,
                                 i + 1,
@@ -478,7 +478,7 @@ impl FileDownloadSession {
                                 if completed.contains(&j) {
                                     continue;
                                 }
-                                if self.is_trunk_cached(j).await {
+                                if self.is_chunk_cached(j).await {
                                     cached_prefetches.insert(j);
                                     continue;
                                 }
@@ -648,7 +648,7 @@ impl FileDownloadSession {
         Ok(file)
     }
 
-    async fn is_trunk_cached(&self, i: usize) -> bool {
+    async fn is_chunk_cached(&self, i: usize) -> bool {
         match self.metadata.is_chunk_linked(self.file_id, i) {
             Ok(Some(sha)) => self.backend.exists(&sha).await.unwrap_or(false),
             _ => false,
@@ -847,7 +847,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
         let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalBackend::new(
-            dir.path().join("trunks"),
+            dir.path().join("chunks"),
             Compression::None,
         ));
         let fetched_bytes = Arc::new(AtomicU64::new(0));
@@ -893,7 +893,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
         let backend: Arc<dyn crate::storage::StorageBackend> = Arc::new(LocalBackend::new(
-            dir.path().join("trunks"),
+            dir.path().join("chunks"),
             Compression::None,
         ));
         let fetched_bytes = Arc::new(AtomicU64::new(0));

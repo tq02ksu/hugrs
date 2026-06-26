@@ -38,23 +38,23 @@ fn test_add_and_get_file() {
 }
 
 #[test]
-fn test_add_trunk_and_link() {
+fn test_add_chunk_and_link() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let store = MetadataStore::new(&db_path).unwrap();
 
     store
-        .ensure_trunk("abc123", "local", "ab/c3/abc123", 100, 100)
+        .ensure_chunk("abc123", "local", "ab/c3/abc123", 100, 100)
         .unwrap();
-    let trunk = store.get_trunk("abc123").unwrap().unwrap();
-    assert_eq!(trunk.size, 100);
-    assert_eq!(trunk.ref_count, 0);
+    let chunk = store.get_chunk("abc123").unwrap().unwrap();
+    assert_eq!(chunk.size, 100);
+    assert_eq!(chunk.ref_count, 0);
 
     let file = store.add_file("test.bin", "repo-x", 100, "upload").unwrap();
-    store.link_file_trunk(file.id, "abc123", 0, 100).unwrap();
+    store.link_file_chunk(file.id, "abc123", 0, 100).unwrap();
 
-    let trunk = store.get_trunk("abc123").unwrap().unwrap();
-    assert_eq!(trunk.ref_count, 1);
+    let chunk = store.get_chunk("abc123").unwrap().unwrap();
+    assert_eq!(chunk.ref_count, 1);
 }
 
 #[test]
@@ -64,14 +64,14 @@ fn test_unlink_and_gc() {
     let store = MetadataStore::new(&db_path).unwrap();
 
     store
-        .ensure_trunk("def456", "local", "de/f4/def456", 200, 200)
+        .ensure_chunk("def456", "local", "de/f4/def456", 200, 200)
         .unwrap();
     let file = store.add_file("x.bin", "repo-z", 200, "upload").unwrap();
-    store.link_file_trunk(file.id, "def456", 0, 200).unwrap();
+    store.link_file_chunk(file.id, "def456", 0, 200).unwrap();
 
     store.delete_file("x.bin", "upload").unwrap();
 
-    let orphans = store.get_orphan_trunks().unwrap();
+    let orphans = store.get_orphan_chunks().unwrap();
     assert_eq!(orphans.len(), 1);
     assert_eq!(orphans[0], "def456");
 }
@@ -100,7 +100,7 @@ fn test_stats() {
     assert_eq!(stats.repo_count, 0);
 
     store.add_file("f.bin", "r", 500, "upload").unwrap();
-    store.ensure_trunk("s1", "local", "s/1", 500, 500).unwrap();
+    store.ensure_chunk("s1", "local", "s/1", 500, 500).unwrap();
 
     let stats = store.get_stats().unwrap();
     assert_eq!(stats.file_count, 1);
