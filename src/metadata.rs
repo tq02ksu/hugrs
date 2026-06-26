@@ -78,13 +78,12 @@ impl MetadataStore {
             M::up(include_str!("migrations/001_initial_schema.sql")),
             M::up(include_str!("migrations/002_rename_trunk_to_chunk.sql")),
             M::up(include_str!("migrations/003_drop_http_cache.sql")),
+            M::up(include_str!("migrations/004_add_indexes.sql")),
         ]);
 
         migrations.to_latest(&mut conn)?;
 
         Self::run_legacy_migrations(&conn)?;
-
-        conn.execute_batch(include_str!("migrations/004_add_indexes.sql"))?;
 
         Ok(())
     }
