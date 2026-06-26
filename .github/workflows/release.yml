@@ -6,23 +6,127 @@ on:
 
 jobs:
   binary:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            asset_name: hugrs-x86_64-unknown-linux-musl
+            binary_name: hugrs
+            archive_ext: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset_name: hugrs-aarch64-unknown-linux-musl
+            binary_name: hugrs
+            archive_ext: tar.gz
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            asset_name: hugrs-x86_64-apple-darwin
+            binary_name: hugrs
+            archive_ext: tar.gz
+          - os: macos-15
+            target: aarch64-apple-darwin
+            asset_name: hugrs-aarch64-apple-darwin
+            binary_name: hugrs
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: hugrs-x86_64-pc-windows-msvc
+            binary_name: hugrs.exe
+            archive_ext: zip
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset_name: hugrs-aarch64-pc-windows-msvc
+            binary_name: hugrs.exe
+            archive_ext: zip
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract tag version
+        shell: bash
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: cargo build --release
+      - name: Install Zig
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Install cargo-zigbuild
+        if: runner.os == 'Linux'
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build release binary (Linux)
+        if: runner.os == 'Linux'
+        run: cargo zigbuild --release --target ${{ matrix.target }}
+
+      - name: Build release binary (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release binary (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/${{ matrix.binary_name }}
+          archive_name="hugrs-${RELEASE_VERSION}-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          tar -C dist -czf "$archive_name" ${{ matrix.binary_name }}
+          echo "ARCHIVE_NAME=$archive_name" >> "$GITHUB_ENV"
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.binary_name }}"
+          $archiveName = "hugrs-$env:RELEASE_VERSION-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          Compress-Archive -Path "dist/${{ matrix.binary_name }}" -DestinationPath $archiveName
+          "ARCHIVE_NAME=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ env.ARCHIVE_NAME }}
+
+  publish_binary:
+    needs: binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/hugrs
+          files: dist/*
           generate_release_notes: true
 
   docker:
