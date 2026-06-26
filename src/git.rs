@@ -38,6 +38,7 @@ fn rewrite_href(href: &str, proxy_base: &str, upstream_endpoint: &str) -> String
         "https://cdn-lfs.huggingface.co".to_string(),
         "https://cdn-lfs-us-1.huggingface.co".to_string(),
         "https://lfs.huggingface.co".to_string(),
+        "https://modelscope.cn".to_string(),
         "https://www.modelscope.cn".to_string(),
     ];
 

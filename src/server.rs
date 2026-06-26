@@ -607,21 +607,32 @@ async fn file_proxy_inner(
             .await
             .unwrap_or(false)
         {
-            tracing::debug!("GET cache hit (streaming): {}", cache_name);
-            let (file, content_length, stream) = service
-                .stream_cached_file(
-                    &cache_name,
-                    source,
-                    range.map(|r| r.0),
-                    range.and_then(|r| r.1),
-                )
-                .await?;
-            tracing::info!(
-                "{}: cache hit, stream ready in {}ms",
-                cache_name,
-                get_start.elapsed().as_millis()
+            let file_opt = service.info(&cache_name, source).await.ok().flatten();
+            let stale = file_opt
+                .as_ref()
+                .map(|f| range.map(|r| r.0).unwrap_or(0) >= f.total_size as u64)
+                .unwrap_or(false);
+            if !stale {
+                tracing::debug!("GET cache hit (streaming): {}", cache_name);
+                let (file, content_length, stream) = service
+                    .stream_cached_file(
+                        &cache_name,
+                        source,
+                        range.map(|r| r.0),
+                        range.and_then(|r| r.1),
+                    )
+                    .await?;
+                tracing::info!(
+                    "{}: cache hit, stream ready in {}ms",
+                    cache_name,
+                    get_start.elapsed().as_millis()
+                );
+                return build_stream_response(file, content_length, stream, &path, range);
+            }
+            tracing::debug!(
+                "GET cache stale (range beyond cached size), refreshing from upstream: {}",
+                cache_name
             );
-            return build_stream_response(file, content_length, stream, &path, range);
         }
     }
 
