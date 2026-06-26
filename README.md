@@ -75,6 +75,9 @@ modelscope download qwen/Qwen3.5-0.8B --endpoint http://127.0.0.1:3000/ms
 
 ### git clone
 
+> [!WARNING]
+> `git clone` + `git lfs pull` creates a full working copy **plus** a local proxy cache copy of every large file, roughly doubling disk usage. For model downloads prefer `hfd.sh`, `huggingface-cli`, or `modelscope` CLI — they download only the model files without git overhead.
+
 ```bash
 git clone http://127.0.0.1:3000/Qwen/Qwen3.5-0.8B
 git clone http://127.0.0.1:3000/hf/Qwen/Qwen3.5-0.8B

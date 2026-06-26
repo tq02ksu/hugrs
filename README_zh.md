@@ -75,6 +75,9 @@ modelscope download qwen/Qwen3.5-0.8B --endpoint http://127.0.0.1:3000/ms
 
 ### git clone
 
+> [!WARNING]
+> `git clone` + `git lfs pull` 会同时创建完整工作副本和本地代理缓存，磁盘占用约翻倍。推荐使用 `hfd.sh`、`huggingface-cli` 或 `modelscope` CLI 下载模型，仅拉取模型文件，无 git 额外开销。
+
 ```bash
 git clone http://127.0.0.1:3000/Qwen/Qwen3.5-0.8B
 git clone http://127.0.0.1:3000/hf/Qwen/Qwen3.5-0.8B

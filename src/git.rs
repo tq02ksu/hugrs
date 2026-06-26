@@ -11,6 +11,7 @@ pub fn rewrite_lfs_urls(
     body: &str,
     proxy_base: &str,
     upstream_endpoint: &str,
+    source: &str,
 ) -> anyhow::Result<String> {
     let mut json: Value = serde_json::from_str(body)?;
 
@@ -19,7 +20,7 @@ pub fn rewrite_lfs_urls(
             if let Some(actions) = obj["actions"].as_object_mut() {
                 if let Some(download) = actions.get_mut("download") {
                     if let Some(href) = download["href"].as_str() {
-                        let rewritten = rewrite_href(href, proxy_base, upstream_endpoint);
+                        let rewritten = rewrite_href(href, proxy_base, upstream_endpoint, source);
                         download["href"] = Value::String(rewritten);
                     }
                 }
@@ -30,20 +31,32 @@ pub fn rewrite_lfs_urls(
     Ok(serde_json::to_string(&json)?)
 }
 
-fn rewrite_href(href: &str, proxy_base: &str, upstream_endpoint: &str) -> String {
-    let endpoints = [
-        upstream_endpoint.to_string(),
-        "https://huggingface.co".to_string(),
-        "https://hf-mirror.com".to_string(),
-        "https://cdn-lfs.huggingface.co".to_string(),
-        "https://cdn-lfs-us-1.huggingface.co".to_string(),
-        "https://lfs.huggingface.co".to_string(),
-        "https://modelscope.cn".to_string(),
-        "https://www.modelscope.cn".to_string(),
+fn rewrite_href(href: &str, proxy_base: &str, upstream_endpoint: &str, source: &str) -> String {
+    let ms_domains = ["https://modelscope.cn", "https://www.modelscope.cn"];
+    let hf_domains = [
+        "https://huggingface.co",
+        "https://hf-mirror.com",
+        "https://cdn-lfs.huggingface.co",
+        "https://cdn-lfs-us-1.huggingface.co",
+        "https://lfs.huggingface.co",
     ];
 
-    for ep in &endpoints {
-        if let Some(rest) = href.strip_prefix(ep) {
+    if source == "ms" {
+        for domain in &ms_domains {
+            if let Some(rest) = href.strip_prefix(domain) {
+                return format!("{}/ms{}", proxy_base, rest);
+            }
+        }
+        if let Some(rest) = href.strip_prefix(upstream_endpoint) {
+            return format!("{}/ms{}", proxy_base, rest);
+        }
+    } else {
+        for domain in &hf_domains {
+            if let Some(rest) = href.strip_prefix(domain) {
+                return format!("{}{}", proxy_base, rest);
+            }
+        }
+        if let Some(rest) = href.strip_prefix(upstream_endpoint) {
             return format!("{}{}", proxy_base, rest);
         }
     }
@@ -141,7 +154,7 @@ pub async fn lfs_batch(
         .unwrap_or("127.0.0.1:3000");
     let proxy_base = format!("{}://{}", scheme, host);
 
-    let rewritten = rewrite_lfs_urls(&resp_text, &proxy_base, endpoint)
+    let rewritten = rewrite_lfs_urls(&resp_text, &proxy_base, endpoint, source)
         .map_err(crate::server::AppError::from)?;
 
     axum::response::Response::builder()
