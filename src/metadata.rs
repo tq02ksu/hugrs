@@ -80,9 +80,11 @@ impl MetadataStore {
             M::up(include_str!("migrations/003_drop_http_cache.sql")),
         ]);
 
-        migrations.to_latest(&mut *conn)?;
+        migrations.to_latest(&mut conn)?;
 
         Self::run_legacy_migrations(&conn)?;
+
+        conn.execute_batch(include_str!("migrations/004_add_indexes.sql"))?;
 
         Ok(())
     }

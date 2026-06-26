@@ -748,6 +748,7 @@ impl CacheService {
         Ok((file, content_length, ReceiverStream::new(rx)))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn stream_from_upstream(
         &self,
         url: &str,

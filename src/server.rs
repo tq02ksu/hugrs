@@ -403,6 +403,7 @@ pub async fn ms_repo_file_proxy(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn file_proxy_inner(
     state: AppState,
     source: &str,
