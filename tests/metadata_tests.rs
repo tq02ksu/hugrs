@@ -17,6 +17,13 @@ fn test_init_schema() {
         )
         .unwrap();
     assert_eq!(row, "files");
+
+    let version: i64 = store
+        .raw_conn()
+        .unwrap()
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
 }
 
 #[test]
@@ -180,7 +187,7 @@ fn test_migration_from_old_unique_name_schema() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
 
-    // Create old-style DB manually with UNIQUE(name)
+    // Create v0.2.0-style DB manually
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch(
@@ -191,8 +198,36 @@ fn test_migration_from_old_unique_name_schema() {
                 total_size    INTEGER NOT NULL,
                 created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                 last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
-                source        TEXT NOT NULL DEFAULT 'pull'
+                source        TEXT NOT NULL,
+                etag          TEXT,
+                x_repo_commit TEXT,
+                x_linked_size INTEGER,
+                x_linked_etag TEXT,
+                content_type  TEXT
             );
+            CREATE TABLE trunks (
+                sha256           TEXT PRIMARY KEY,
+                backend          TEXT NOT NULL,
+                path             TEXT NOT NULL,
+                size             INTEGER NOT NULL,
+                ref_count        INTEGER NOT NULL DEFAULT 0,
+                compressed_size  INTEGER
+            );
+            CREATE TABLE file_trunks (
+                file_id      INTEGER NOT NULL REFERENCES files(id),
+                sha256       TEXT NOT NULL REFERENCES trunks(sha256),
+                chunk_index  INTEGER NOT NULL,
+                chunk_size   INTEGER NOT NULL,
+                PRIMARY KEY (file_id, chunk_index)
+            );
+            CREATE TABLE http_cache (
+                url        TEXT PRIMARY KEY,
+                status     INTEGER NOT NULL,
+                headers    TEXT NOT NULL,
+                body       BLOB NOT NULL,
+                cached_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            PRAGMA user_version = 1;
             INSERT INTO files (name, repo, total_size, source) VALUES ('model.bin', 'repo', 100, 'pull');"
         ).unwrap();
     }

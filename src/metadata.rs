@@ -74,100 +74,17 @@ impl MetadataStore {
     fn init_schema(&self) -> anyhow::Result<()> {
         let mut conn = self.conn.lock().unwrap();
 
+        conn.pragma_update(None, "foreign_keys", "OFF")?;
         let migrations = Migrations::new(vec![
             M::up(include_str!("migrations/001_initial_schema.sql")),
-            M::up(include_str!("migrations/002_rename_trunk_to_chunk.sql")),
+            M::up(include_str!("migrations/002_rename_trunk_to_chunk.sql")).foreign_key_check(),
             M::up(include_str!("migrations/003_drop_http_cache.sql")),
             M::up(include_str!("migrations/004_add_indexes.sql")),
         ]);
 
-        migrations.to_latest(&mut conn)?;
-
-        Self::run_legacy_migrations(&conn)?;
-
-        Ok(())
-    }
-
-    fn run_legacy_migrations(conn: &Connection) -> anyhow::Result<()> {
-        let has_files = conn.prepare("SELECT name FROM files LIMIT 0").is_ok();
-        if !has_files {
-            return Ok(());
-        }
-        let legacy_cols = [
-            ("repo", "TEXT NOT NULL DEFAULT ''"),
-            ("source", "TEXT NOT NULL DEFAULT 'hf'"),
-            ("etag", "TEXT"),
-            ("x_repo_commit", "TEXT"),
-            ("x_linked_size", "INTEGER"),
-            ("x_linked_etag", "TEXT"),
-            ("content_type", "TEXT"),
-        ];
-        for (col, def) in &legacy_cols {
-            let exists = conn
-                .prepare(&format!("SELECT {} FROM files LIMIT 0", col))
-                .is_ok();
-            if !exists {
-                let _ =
-                    conn.execute_batch(&format!("ALTER TABLE files ADD COLUMN {} {}", col, def));
-            }
-        }
-
-        let needs_source_migration: bool = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='files'",
-                [],
-                |row| {
-                    let sql: String = row.get(0)?;
-                    Ok(!sql.contains("UNIQUE(name, source)"))
-                },
-            )
-            .unwrap_or(false);
-
-        if needs_source_migration {
-            conn.execute_batch("PRAGMA foreign_keys = OFF")?;
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS files_mig (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name          TEXT NOT NULL,
-                    repo          TEXT NOT NULL DEFAULT '',
-                    total_size    INTEGER NOT NULL,
-                    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-                    last_accessed TEXT NOT NULL DEFAULT (datetime('now')),
-                    source        TEXT NOT NULL DEFAULT 'hf',
-                    etag          TEXT,
-                    x_repo_commit TEXT,
-                    x_linked_size INTEGER,
-                    x_linked_etag TEXT,
-                    content_type  TEXT,
-                    UNIQUE(name, source)
-                );
-                INSERT OR IGNORE INTO files_mig (id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type)
-                    SELECT id, name, repo, total_size, created_at, last_accessed,
-                           CASE WHEN source IN ('pull', 'upload') THEN 'hf' ELSE source END,
-                           etag, x_repo_commit, x_linked_size, x_linked_etag, content_type
-                    FROM files;
-                DROP TABLE files;
-                ALTER TABLE files_mig RENAME TO files;
-            ")?;
-            conn.execute_batch("PRAGMA foreign_keys = ON")?;
-        }
-
-        let table = if conn.prepare("SELECT 1 FROM chunks LIMIT 0").is_ok() {
-            "chunks"
-        } else if conn.prepare("SELECT 1 FROM trunks LIMIT 0").is_ok() {
-            "trunks"
-        } else {
-            return Ok(());
-        };
-        let has_col = conn
-            .prepare(&format!("SELECT compressed_size FROM {} LIMIT 0", table))
-            .is_ok();
-        if !has_col {
-            let _ = conn.execute_batch(&format!(
-                "ALTER TABLE {} ADD COLUMN compressed_size INTEGER",
-                table
-            ));
-        }
+        let result = migrations.to_latest(&mut conn);
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        result?;
 
         Ok(())
     }
