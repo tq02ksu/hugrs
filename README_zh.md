@@ -86,6 +86,21 @@ git clone http://127.0.0.1:3000/ms/qwen/Qwen3.5-0.8B
 
 代理内部跟随上游 30x 跳转并合并响应头 — 以上工具除端点外无需额外配置。
 
+### TEI (Text Embeddings Inference)
+
+将 TEI 指向 HugRS 以缓存模型下载：
+
+```bash
+docker run --rm --gpus all -p 8002:80 \
+  -e HF_ENDPOINT=http://your-hugrs-host:3000 \
+  ghcr.io/huggingface/text-embeddings-inference:1.9.3 \
+  --model-id BAAI/bge-reranker-v2-m3
+```
+
+将 `your-hugrs-host` 替换为 HugRS 服务器地址。TEI 通过 `HF_ENDPOINT` 解析模型文件 — HugRS 首次拉取时自动缓存，后续请求本地命中。
+
+> TEI / Text Embeddings Inference: point TEI at HugRS via `-e HF_ENDPOINT=http://your-hugrs-host:3000`. Models are cached on first pull, served locally thereafter. Replace `your-hugrs-host` with your HugRS server address.
+
 ## HTTP API
 
 [📖 OpenAPI Spec →](openapi.yaml)

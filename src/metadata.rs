@@ -80,6 +80,7 @@ impl MetadataStore {
             M::up(include_str!("migrations/002_rename_trunk_to_chunk.sql")).foreign_key_check(),
             M::up(include_str!("migrations/003_drop_http_cache.sql")),
             M::up(include_str!("migrations/004_add_indexes.sql")),
+            M::up(include_str!("migrations/005_cleanup_headerless_files.sql")),
         ]);
 
         let result = migrations.to_latest(&mut conn);

@@ -23,7 +23,7 @@ fn test_init_schema() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn test_migration_from_old_unique_name_schema() {
                 cached_at  TEXT NOT NULL DEFAULT (datetime('now'))
             );
             PRAGMA user_version = 1;
-            INSERT INTO files (name, repo, total_size, source) VALUES ('model.bin', 'repo', 100, 'pull');"
+            INSERT INTO files (name, repo, total_size, source, etag, content_type) VALUES ('model.bin', 'repo', 100, 'pull', 'abc', 'application/octet-stream');"
         ).unwrap();
     }
 

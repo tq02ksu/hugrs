@@ -121,11 +121,25 @@ impl CacheService {
     ) -> anyhow::Result<()> {
         let total_size = data.len() as i64;
 
+        let existing_headers = self.metadata.get_file_by_name(name, source)?;
+
         self.metadata.delete_file(name, source)?;
 
         let chunks = chunker::chunk_with_hashes(&data, CHUNK_SIZE);
 
         let file = self.metadata.add_file(name, repo, total_size, source)?;
+
+        if let Some(ref h) = existing_headers {
+            self.metadata.set_file_headers(
+                name,
+                source,
+                h.etag.as_deref(),
+                h.x_repo_commit.as_deref(),
+                h.x_linked_size,
+                h.x_linked_etag.as_deref(),
+                h.content_type.as_deref(),
+            )?;
+        }
 
         for chunk in &chunks {
             let stored_size: i64 = if !self.backend.exists(&chunk.sha256).await? {

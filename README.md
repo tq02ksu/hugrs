@@ -86,6 +86,21 @@ git clone http://127.0.0.1:3000/ms/qwen/Qwen3.5-0.8B
 
 The proxy follows upstream 302 redirects internally and returns merged headers — all three tools work with zero special configuration beyond the endpoint.
 
+### TEI (Text Embeddings Inference)
+
+Point TEI at HugRS to cache model downloads:
+
+```bash
+docker run --rm --gpus all -p 8002:80 \
+  -e HF_ENDPOINT=http://your-hugrs-host:3000 \
+  ghcr.io/huggingface/text-embeddings-inference:1.9.3 \
+  --model-id BAAI/bge-reranker-v2-m3
+```
+
+Replace `your-hugrs-host` with the HugRS server address. TEI reads `HF_ENDPOINT` to resolve model files — HugRS caches them on first pull and serves subsequent requests locally.
+
+> TEI / TEI 文本嵌入推理：通过 `-e HF_ENDPOINT=http://your-hugrs-host:3000` 将模型下载指向 HugRS 代理，首次下载自动缓存，后续请求本地命中。将 `your-hugrs-host` 替换为 HugRS 服务器地址。
+
 ## HTTP API
 
 [📖 OpenAPI Spec →](openapi.yaml)

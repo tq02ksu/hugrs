@@ -61,6 +61,10 @@ cargo build --release
 - Keep modules focused: one module = one responsibility
 - No comments unless code is genuinely non-obvious
 
+## Documentation
+
+- **Bilingual README & CONFIG**: `README.md` and `docs/CONFIG.md` have Chinese counterparts `README_zh.md` and `docs/CONFIG_zh.md`. When modifying either file, sync the same change to its counterpart. English body + Chinese blockquote, or Chinese body + English blockquote — same content in both languages.
+
 ## Project Structure
 
 ```
