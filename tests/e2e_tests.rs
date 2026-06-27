@@ -621,3 +621,229 @@ async fn test_ms_repo_stale_small_cache_refreshes_on_valid_range() {
     assert_eq!(resp.status(), StatusCode::PARTIAL_CONTENT);
     assert!(state.ms_repo_get_count.load(Ordering::SeqCst) > 0);
 }
+
+#[tokio::test]
+async fn test_small_file_cache_hit_preserves_headers() {
+    let test_data: Vec<u8> = b"{\"model_type\":\"qwen2\",\"vocab_size\":151936}\n".to_vec();
+    assert!(test_data.len() < CHUNK_SIZE);
+    let (upstream, _s) = start_upstream(test_data.clone()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let get = |uri: &str| {
+        let app = app.clone();
+        let uri = uri.to_string();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("GET")
+                .uri(&uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        }
+    };
+
+    let head = |uri: &str| {
+        let app = app.clone();
+        let uri = uri.to_string();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("HEAD")
+                .uri(&uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        }
+    };
+
+    let head_resp = head("/org/repo/resolve/main/cfg.json").await;
+    assert!(head_resp.status().is_success());
+    assert!(head_resp.headers().get("etag").is_some(), "HEAD should return etag");
+
+    let get1 = get("/org/repo/resolve/main/cfg.json").await;
+    assert!(get1.status().is_success());
+    assert!(get1.headers().get("etag").is_some(), "first GET should return etag");
+
+    let get2 = get("/org/repo/resolve/main/cfg.json").await;
+    assert!(get2.status().is_success());
+    assert!(
+        get2.headers().get("etag").is_some(),
+        "second GET (cache hit) should return etag"
+    );
+    assert!(
+        get2.headers().get("content-type").is_some(),
+        "second GET (cache hit) should return content-type"
+    );
+    assert!(
+        get2.headers().get("x-repo-commit").is_some(),
+        "second GET (cache hit) should return x-repo-commit"
+    );
+}
+
+async fn start_redirect_upstream(data: Vec<u8>) -> (String,) {
+    let data = Arc::new(data);
+    let d = data.clone();
+
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head({
+                let _d = d.clone();
+                move || async move {
+                    Response::builder()
+                        .status(StatusCode::FOUND)
+                        .header("X-Repo-Commit", "deadbeef")
+                        .header("X-Linked-ETag", "\"linked-etag\"")
+                        .header("Location", "/cdn/final.bin")
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            })
+            .get({
+                let _d = d.clone();
+                move || async move {
+                    Response::builder()
+                        .status(StatusCode::FOUND)
+                        .header("X-Repo-Commit", "deadbeef")
+                        .header("X-Linked-ETag", "\"linked-etag\"")
+                        .header("Location", "/cdn/final.bin")
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            }),
+        )
+        .route(
+            "/cdn/final.bin",
+            head({
+                let _d = d.clone();
+                move || async move {
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Length", _d.len())
+                        .header("ETag", "\"final-etag\"")
+                        .header("Content-Type", "application/json; charset=utf-8")
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }
+            })
+            .get({
+                move || async move {
+                    let body = d.to_vec();
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Length", body.len())
+                        .header("Content-Type", "application/json; charset=utf-8")
+                        .body(axum::body::Body::from(body))
+                        .unwrap()
+                }
+            }),
+        );
+
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let upstream = format!("http://127.0.0.1:{}", addr.port());
+    tokio::spawn(async move {
+        axum::serve(l, app).await.unwrap();
+    });
+    (upstream,)
+}
+
+#[tokio::test]
+async fn test_redirect_cache_hit_preserves_headers() {
+    let test_data: Vec<u8> = b"{\"model_type\":\"qwen2\",\"vocab_size\":151936}\n".to_vec();
+    assert!(test_data.len() < CHUNK_SIZE);
+    let (upstream,) = start_redirect_upstream(test_data.clone()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let get = |uri: &str| {
+        let app = app.clone();
+        let uri = uri.to_string();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("GET")
+                .uri(&uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        }
+    };
+
+    let head = |uri: &str| {
+        let app = app.clone();
+        let uri = uri.to_string();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("HEAD")
+                .uri(&uri)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        }
+    };
+
+    let head_resp = head("/org/repo/resolve/main/cfg.json").await;
+    assert!(head_resp.status().is_success(), "HEAD should succeed: {:?}", head_resp.status());
+    assert!(head_resp.headers().get("etag").is_some(), "HEAD should return etag");
+    assert!(head_resp.headers().get("x-repo-commit").is_some(), "HEAD should return x-repo-commit");
+
+    let get1 = get("/org/repo/resolve/main/cfg.json").await;
+    assert!(get1.status().is_success(), "first GET should succeed");
+    assert!(get1.headers().get("etag").is_some(), "first GET should return etag");
+
+    let get2 = get("/org/repo/resolve/main/cfg.json").await;
+    assert!(get2.status().is_success(), "second GET (cache hit) should succeed");
+    assert!(
+        get2.headers().get("etag").is_some(),
+        "second GET (cache hit, 302 upstream) should return etag"
+    );
+    assert!(
+        get2.headers().get("content-type").is_some(),
+        "second GET (cache hit, 302 upstream) should return content-type"
+    );
+    assert!(
+        get2.headers().get("x-repo-commit").is_some(),
+        "second GET (cache hit, 302 upstream) should return x-repo-commit"
+    );
+    assert!(
+        get2.headers().get("x-linked-etag").is_some(),
+        "second GET (cache hit, 302 upstream) should return x-linked-etag"
+    );
+}
+
+#[tokio::test]
+async fn test_redirect_small_file_get_populates_db_headers() {
+    let test_data: Vec<u8> = b"{\"model_type\":\"qwen2\",\"vocab_size\":151936}\n".to_vec();
+    assert!(test_data.len() < CHUNK_SIZE);
+    let (upstream,) = start_redirect_upstream(test_data).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    for _ in 0..2 {
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/org/repo/resolve/main/cfg.json")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert!(resp.status().is_success());
+    }
+
+    let store = MetadataStore::new(&dir.path().join("http_db")).unwrap();
+    let file = store.get_file_by_name("org/repo/cfg.json", "hf").unwrap();
+    let file = file.or_else(|| store.get_file_by_name("cfg.json", "hf").unwrap()).unwrap();
+
+    assert_eq!(file.etag.as_deref(), Some("\"final-etag\""));
+    assert_eq!(file.x_repo_commit.as_deref(), Some("deadbeef"));
+    assert_eq!(file.x_linked_etag.as_deref(), Some("\"linked-etag\""));
+    assert_eq!(
+        file.content_type.as_deref(),
+        Some("application/json; charset=utf-8")
+    );
+}
