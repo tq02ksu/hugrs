@@ -76,21 +76,20 @@ cargo build --release
   - `docs/CLI.md` ↔ `docs/CLI_zh.md`
   When modifying either file in a pair, sync the same change to its counterpart.
 
-## Release Notes
+## Release Checklist
 
-- Release version currently follows git tags like `v0.4.0`
-- `.github/workflows/release.yml` is tag-driven: pushing `v*` triggers binary and Docker release jobs
-- Release artifacts must include both `hugrs` and `hugrsctl`
-- Docker image must continue to ship both binaries, with `hugrs` as the entrypoint
-- When cutting a release, update:
-  - `Cargo.toml` version
-  - `Cargo.lock`
-  - Docker image tags in `README.md` and `README_zh.md`
-  - any release-facing docs that mention the current version
-- Before tagging a release, verify at minimum:
-  - `cargo fmt -- --check`
-  - `cargo clippy -- -D warnings`
-  - `cargo test`
+- Release tags use the `v*` pattern. Pushing a tag like `v0.4.0` triggers `.github/workflows/release.yml`.
+- Release artifacts and Docker image must include both `hugrs` and `hugrsctl`.
+- Before cutting a release, follow this order:
+  1. Summarize the changes since the previous version and write them into `CHANGELOG.md`.
+  2. Re-review the implementation against the changelog and fix any incomplete design or release details first.
+  3. If nothing else is missing, run the quality gates:
+     - `cargo fmt -- --check`
+     - `cargo clippy -- -D warnings`
+     - `cargo test`
+  4. Only after the checks pass, bump the version in `Cargo.toml`.
+  5. Update `Cargo.lock`, Docker image tags in `README.md` / `README_zh.md`, and any user-facing docs that mention the current release version.
+  6. Commit the release changes, create the git tag, and push both commit and tag.
 
 ## Project Structure
 
