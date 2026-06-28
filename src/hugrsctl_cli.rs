@@ -157,31 +157,43 @@ fn print_service_status(json: bool, value: &ServiceStatusResponse) {
         return;
     }
 
-    println!("status: {}", value.status);
-    println!("version: {}", value.version);
-    println!("endpoint: {}", value.endpoint);
-    println!("cache root: {}", value.cache.root);
-    println!("db path: {}", value.cache.db_path);
-    println!(
-        "max size: {}",
-        value
-            .cache
-            .max_size
-            .map(format_bytes)
-            .unwrap_or_else(|| "unlimited".to_string())
-    );
-    println!(
-        "sources: hf={} ({})  ms={} ({})",
-        enabled(value.sources.hf.enabled),
-        value.sources.hf.endpoint,
-        enabled(value.sources.ms.enabled),
-        value.sources.ms.endpoint
-    );
-    println!(
-        "admin token: {} ({})",
-        enabled(value.auth.admin_token_configured),
-        value.auth.admin_token_file
-    );
+    let rows = [
+        ("status", value.status.clone()),
+        ("version", value.version.clone()),
+        ("endpoint", value.endpoint.clone()),
+        ("cache root", value.cache.root.clone()),
+        ("db path", value.cache.db_path.clone()),
+        (
+            "max size",
+            value
+                .cache
+                .max_size
+                .map(format_bytes)
+                .unwrap_or_else(|| "unlimited".to_string()),
+        ),
+        (
+            "sources",
+            format!(
+                "hf={} ({})  ms={} ({})",
+                enabled(value.sources.hf.enabled),
+                value.sources.hf.endpoint,
+                enabled(value.sources.ms.enabled),
+                value.sources.ms.endpoint
+            ),
+        ),
+        (
+            "admin token",
+            format!(
+                "{} ({})",
+                enabled(value.auth.admin_token_configured),
+                value.auth.admin_token_file
+            ),
+        ),
+    ];
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    for (label, value) in rows {
+        println!("{label:<width$}: {value}");
+    }
 }
 
 fn print_service_stats(json: bool, value: &ServiceStatsResponse) {
@@ -190,17 +202,26 @@ fn print_service_stats(json: bool, value: &ServiceStatsResponse) {
         return;
     }
 
-    println!("repos: {}", value.repos);
-    println!("files: {}", value.files);
-    println!("logical size: {}", format_bytes_i64(value.logical_bytes));
-    println!("stored size: {}", format_bytes_i64(value.stored_bytes));
-    println!(
-        "saved size: {} ({:.1}%)",
-        format_bytes_i64(value.saved_bytes),
-        value.saved_percent
-    );
-    println!("fetched: {}", format_bytes(value.fetched_bytes));
-    println!("served: {}", format_bytes(value.served_bytes));
+    let rows = [
+        ("repos", value.repos.to_string()),
+        ("files", value.files.to_string()),
+        ("logical size", format_bytes_i64(value.logical_bytes)),
+        ("stored size", format_bytes_i64(value.stored_bytes)),
+        (
+            "saved size",
+            format!(
+                "{} ({:.1}%)",
+                format_bytes_i64(value.saved_bytes),
+                value.saved_percent
+            ),
+        ),
+        ("fetched", format_bytes(value.fetched_bytes)),
+        ("served", format_bytes(value.served_bytes)),
+    ];
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    for (label, value) in rows {
+        println!("{label:<width$}: {value}");
+    }
 }
 
 fn print_gc_preview(json: bool, value: &GcPreviewResponse) {
@@ -209,8 +230,14 @@ fn print_gc_preview(json: bool, value: &GcPreviewResponse) {
         return;
     }
 
-    println!("candidate chunks: {}", value.candidate_chunks);
-    println!("candidate bytes: {}", format_bytes(value.candidate_bytes));
+    let rows = [
+        ("candidate chunks", value.candidate_chunks.to_string()),
+        ("candidate bytes", format_bytes(value.candidate_bytes)),
+    ];
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    for (label, value) in rows {
+        println!("{label:<width$}: {value}");
+    }
 }
 
 fn print_gc_result(json: bool, value: &GcResultResponse) {
@@ -219,9 +246,15 @@ fn print_gc_result(json: bool, value: &GcResultResponse) {
         return;
     }
 
-    println!("deleted chunks: {}", value.deleted_chunks);
-    println!("reclaimed: {}", format_bytes(value.reclaimed_bytes));
-    println!("skipped chunks: {}", value.skipped_chunks);
+    let rows = [
+        ("deleted chunks", value.deleted_chunks.to_string()),
+        ("reclaimed", format_bytes(value.reclaimed_bytes)),
+        ("skipped chunks", value.skipped_chunks.to_string()),
+    ];
+    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
+    for (label, value) in rows {
+        println!("{label:<width$}: {value}");
+    }
 }
 
 fn print_repos_list(json: bool, value: &RepoListResponse) {

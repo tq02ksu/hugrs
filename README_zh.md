@@ -5,44 +5,46 @@
 ## 核心亮点
 
 - **多平台支持** — 同时支持 HuggingFace (`/hf`) 和 ModelScope (`/ms`) 上游
-- **供应链安全** — SHA256 内容寻址，读时校验，杜绝篡改
+- **完整性与安全** — SHA256 内容寻址，读时校验，SQLite WAL + 断点续传
 - **高存储效率** — 4MB 分块去重 + 压缩，跨文件复用
-- **高速访问** — prefetch 智能缓存，首次拉取后本地极速命中
-- **备份级完整性** — SQLite WAL 事务 + 断点续传，零丢失
+- **全异步架构** — 全异步处理链路，事件驱动 prefetch，首次拉取后本地高速命中
+- **易管理** — 内置 `hugrsctl`，支持 service 状态、repo/file 查看、删除与 GC
 - **透明代理** — 完整转发上游 headers，兼容 HF Hub + ModelScope 协议
 - **弹性部署** — 单二进制 + Docker，本地 FS / S3 双后端
 
 ## Docker
 
 ```bash
-docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.3.1
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.4.0
 
 # 指定镜像源 + 持久化缓存（使用命名卷）
 docker volume create hugrs-cache
 docker run -p 3000:3000 \
   -v hugrs-cache:/home/hugrs/.cache/hugrs \
   -e HUGRS_HF_ENDPOINT=https://hf-mirror.com \
-  ghcr.io/tq02ksu/hugrs:0.3.1
+  ghcr.io/tq02ksu/hugrs:0.4.0
 ```
-
-运行在 Debian 13 (trixie-slim)，非 root 用户 `hugrs`。
 
 ## 快速开始
 
 ```bash
-cargo build --release
-cargo run                                   # 启动服务
-HUGRS_HF_ENDPOINT=https://hf-mirror.com cargo run
-HUGRS_MS_ENDPOINT=https://modelscope.cn cargo run
+# 启动守护进程
+hugrs
 
-# 管理客户端
-cargo run --bin hugrsctl -- service
-cargo run --bin hugrsctl -- repo
-cargo run --bin hugrsctl -- file
-cargo run --bin hugrsctl -- service gc --dry-run
+# 可选：覆盖上游地址
+HUGRS_HF_ENDPOINT=https://hf-mirror.com hugrs
+HUGRS_MS_ENDPOINT=https://modelscope.cn hugrs
+
+# 查看缓存状态
+hugrsctl service
+hugrsctl repo
+hugrsctl file
+hugrsctl service gc --dry-run
 ```
 
 `hugrs` 是守护进程，`hugrsctl` 是管理客户端。管理面只暴露服务状态、repo/file 查看、删除和 GC；`chunk` 保持为内部实现细节，不面向用户。
+
+[📖 CLI 详细文档 →](docs/CLI_zh.md)
 
 ## 客户端使用
 
@@ -58,8 +60,18 @@ hfd.sh Qwen/Qwen3.5-0.8B
 ### huggingface-cli / hf download
 
 ```bash
-export HF_DEBUG=1 HF_HUB_DOWNLOAD_TIMEOUT=120 HF_ENDPOINT=http://127.0.0.1:3000
+export HF_DEBUG=1 HF_HUB_DOWNLOAD_TIMEOUT=120 HF_HUB_DOWNLOAD_NUM_THREADS=1 HF_ENDPOINT=http://127.0.0.1:3000
 hf download Qwen/Qwen3.5-0.8B
+```
+
+**初始化虚拟环境**
+
+```bash
+# 安装 uv：curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv
+uv pip install huggingface-hub
+export HF_DEBUG=1 HF_HUB_DOWNLOAD_TIMEOUT=120 HF_HUB_DOWNLOAD_NUM_THREADS=1 HF_ENDPOINT=http://127.0.0.1:3000
+uv run hf download Qwen/Qwen3.5-0.8B
 ```
 
 ### huggingface_hub SDK
@@ -75,6 +87,15 @@ snapshot_download("Qwen/Qwen3.5-0.8B")
 
 ```bash
 modelscope download qwen/Qwen3.5-0.8B --endpoint http://127.0.0.1:3000/ms
+```
+
+**初始化虚拟环境**
+
+```bash
+# 安装 uv：curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv
+uv pip install modelscope
+uv run modelscope download qwen/Qwen3.5-0.8B --endpoint http://127.0.0.1:3000/ms
 ```
 
 ### git clone
@@ -120,11 +141,43 @@ docker run --rm --gpus all -p 8002:80 \
 管理默认值：
 
 - 控制面路径前缀：`/_hugrs/...`
-- admin token 文件：`~/.cache/hugrs/admin.token`
+- admin token 文件：
+  macOS：`~/Library/Caches/hugrs/admin.token`
+  Linux：`~/.cache/hugrs/admin.token`
 
-`hugrsctl` 默认连接 `http://127.0.0.1:3000`，也可通过 `--endpoint` 或 `HUGRS_CONTROL_ENDPOINT` 覆盖服务地址，admin token 则按 `--admin-token`、`HUGRS_ADMIN_TOKEN`、`~/.cache/hugrs/admin.token` 的顺序解析。删除只移除文件缓存引用；`hugrsctl service gc` 负责按批回收 orphan chunk。
+`hugrsctl` 默认连接 `http://127.0.0.1:3000`。服务地址可通过 `--endpoint` 或 `HUGRS_CONTROL_ENDPOINT` 覆盖。admin token 按 `--admin-token`、`HUGRS_ADMIN_TOKEN`、当前平台默认 token 文件 的顺序解析。删除只移除文件缓存引用；`hugrsctl service gc` 负责按批回收 orphan chunk。
 
 [📖 完整配置文档 →](docs/CONFIG_zh.md)
+
+## 开发
+
+从源码启动守护进程：
+
+```bash
+cargo run
+HUGRS_HF_ENDPOINT=https://hf-mirror.com cargo run
+HUGRS_MS_ENDPOINT=https://modelscope.cn cargo run
+```
+
+从源码使用管理客户端：
+
+```bash
+cargo run --bin hugrsctl -- service
+cargo run --bin hugrsctl -- repo
+cargo run --bin hugrsctl -- file
+cargo run --bin hugrsctl -- service gc --dry-run
+```
+
+## 安装后使用
+
+安装完成后，可直接运行守护进程和管理客户端：
+
+```bash
+hugrs
+hugrsctl service
+hugrsctl repo
+hugrsctl file
+```
 
 ## License
 

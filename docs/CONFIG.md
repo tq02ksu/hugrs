@@ -9,6 +9,11 @@ defaults  →  hugrs.toml  →  .env  →  env vars
 (lowest)                                   (highest)
 ```
 
+Default cache directory:
+
+- macOS: `~/Library/Caches`
+- Linux: `~/.cache`
+
 ## Configuration Methods
 
 | Method | Format | Notes |
@@ -17,9 +22,8 @@ defaults  →  hugrs.toml  →  .env  →  env vars
 | `hugrs.toml` | TOML | Tries `./hugrs.toml`, then `~/.config/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | Environment file in the current directory |
 | Env vars | `HUGRS_*` | System environment variables |
-| `hugrsctl` flags | `--xxx` | Management client only; does not configure the daemon |
 
-### Example: 4 ways to set `max_size`
+### Example: 3 ways to set `max_size`
 
 ```bash
 # 1. hugrs.toml
@@ -31,9 +35,6 @@ HUGRS_MAX_SIZE=10737418240
 
 # 3. Env var
 export HUGRS_MAX_SIZE=10737418240
-
-# 4. not supported by `hugrs`
-# `hugrs` itself has no CLI flags; configure the daemon with env vars or hugrs.toml instead
 ```
 
 ---
@@ -45,7 +46,7 @@ export HUGRS_MAX_SIZE=10737418240
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | Storage backend: `local` or `s3` |
-| `local_root` | path | `~/.cache/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | Local storage root directory |
+| `local_root` | path | `$CACHE_DIR/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | Local storage root directory. macOS default: `~/Library/Caches/hugrs/chunks`; Linux default: `~/.cache/hugrs/chunks` |
 | `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | S3 bucket name (required for `backend=s3`) |
 | `s3_region` | string | — | `HUGRS_S3_REGION` | S3 region (required for `backend=s3`) |
 | `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | S3 key prefix, e.g. `"hugrs/cache"` |
@@ -60,7 +61,7 @@ export HUGRS_MAX_SIZE=10737418240
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
-| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite database path |
+| `path` | path | `$CACHE_DIR/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite database path. macOS default: `~/Library/Caches/hugrs/hugrs.db`; Linux default: `~/.cache/hugrs/hugrs.db` |
 
 ### `[server]` — HTTP Server
 
@@ -74,7 +75,7 @@ export HUGRS_MAX_SIZE=10737418240
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `token` | string | auto-generated | `HUGRS_ADMIN_TOKEN` | Fixed admin token for `/_hugrs` APIs |
-| `token_file` | path | `~/.cache/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | Token file written by `hugrs` and used as the default token source for `hugrsctl` |
+| `token_file` | path | `$CACHE_DIR/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | Admin token file. macOS default: `~/Library/Caches/hugrs/admin.token`; Linux default: `~/.cache/hugrs/admin.token` |
 
 ### `[huggingface]` — HuggingFace Hub
 
@@ -194,26 +195,6 @@ HUGRS_MS_PROXY=http://proxy:3128
 ```
 
 ---
-
-## Management Client
-
-`hugrs` is now a zero-argument daemon. Management is done through `hugrsctl`.
-
-Connection rules:
-
-- endpoint: default `http://127.0.0.1:3000`, override with `--endpoint` or `HUGRS_CONTROL_ENDPOINT`
-- admin token: `--admin-token`, then `HUGRS_ADMIN_TOKEN`, then `~/.cache/hugrs/admin.token`
-
-Examples:
-
-```bash
-hugrsctl service
-HUGRS_CONTROL_ENDPOINT=http://10.0.0.5:3000 hugrsctl service
-hugrsctl service gc --dry-run
-hugrsctl repo
-hugrsctl repo delete Qwen/Qwen3-8B
-hugrsctl file show --repo Qwen/Qwen3-8B --file config.json
-```
 
 ## `.env` File Example
 

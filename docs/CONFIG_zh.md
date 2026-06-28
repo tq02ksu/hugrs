@@ -9,6 +9,11 @@
 （最低）                                          （最高）
 ```
 
+默认缓存目录：
+
+- macOS：`~/Library/Caches`
+- Linux：`~/.cache`
+
 ## 配置方式一览
 
 | 方式 | 格式 | 说明 |
@@ -17,9 +22,8 @@
 | `hugrs.toml` | TOML | 先找 `./hugrs.toml`，没有则找 `~/.config/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | 当前目录下的环境文件 |
 | 环境变量 | `HUGRS_*` | 系统环境变量 |
-| `hugrsctl` 参数 | `--xxx` | 仅作用于管理客户端，不配置守护进程 |
 
-### 示例：max_size 的四种配置方式
+### 示例：max_size 的三种配置方式
 
 ```bash
 # 1. hugrs.toml
@@ -31,9 +35,6 @@ HUGRS_MAX_SIZE=10737418240
 
 # 3. 环境变量
 export HUGRS_MAX_SIZE=10737418240
-
-# 4. `hugrs` 不支持 CLI 参数
-# 请改用环境变量或 hugrs.toml 配置守护进程
 ```
 
 ---
@@ -45,7 +46,7 @@ export HUGRS_MAX_SIZE=10737418240
 | 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
 |--------|------|--------|----------|------|
 | `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | 存储后端：`local` 或 `s3` |
-| `local_root` | path | `~/.cache/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | 本地存储根目录 |
+| `local_root` | path | `$CACHE_DIR/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | 本地存储根目录。macOS 默认：`~/Library/Caches/hugrs/chunks`；Linux 默认：`~/.cache/hugrs/chunks` |
 | `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | S3 bucket 名称（backend=s3 时必填） |
 | `s3_region` | string | — | `HUGRS_S3_REGION` | S3 区域（backend=s3 时必填） |
 | `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | S3 key 前缀，如 `"hugrs/cache"` |
@@ -60,7 +61,7 @@ export HUGRS_MAX_SIZE=10737418240
 
 | 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
 |--------|------|--------|----------|------|
-| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite 数据库文件路径 |
+| `path` | path | `$CACHE_DIR/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite 数据库文件路径。macOS 默认：`~/Library/Caches/hugrs/hugrs.db`；Linux 默认：`~/.cache/hugrs/hugrs.db` |
 
 ### `[server]` — HTTP 服务配置
 
@@ -74,7 +75,7 @@ export HUGRS_MAX_SIZE=10737418240
 | 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
 |--------|------|--------|----------|------|
 | `token` | string | 自动生成 | `HUGRS_ADMIN_TOKEN` | `/_hugrs` 管理 API 的固定 admin token |
-| `token_file` | path | `~/.cache/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | `hugrs` 写入的 token 文件，也是 `hugrsctl` 默认读取的 token 来源 |
+| `token_file` | path | `$CACHE_DIR/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | admin token 文件。macOS 默认：`~/Library/Caches/hugrs/admin.token`；Linux 默认：`~/.cache/hugrs/admin.token` |
 
 ### `[huggingface]` — HuggingFace Hub 配置
 
@@ -193,31 +194,6 @@ HUGRS_MS_PROXY=http://proxy:3128
 ```
 
 ---
-
-## 管理客户端
-
-`hugrs` 现在是零参数守护进程。管理操作改由 `hugrsctl` 执行。
-
-连接规则：
-
-- endpoint：默认 `http://127.0.0.1:3000`，可用 `--endpoint` 或 `HUGRS_CONTROL_ENDPOINT` 覆盖
-- admin token：`--admin-token`，其次 `HUGRS_ADMIN_TOKEN`，最后默认读取 `~/.cache/hugrs/admin.token`
-
-常用示例：
-
-```bash
-hugrsctl service
-HUGRS_CONTROL_ENDPOINT=http://10.0.0.5:3000 hugrsctl service
-hugrsctl service stats
-hugrsctl service gc --dry-run
-hugrsctl repo
-hugrsctl repo show Qwen/Qwen3-8B
-hugrsctl repo delete Qwen/Qwen3-8B
-hugrsctl file
-hugrsctl file show --repo Qwen/Qwen3-8B --file config.json
-hugrsctl file delete --repo Qwen/Qwen3-8B --file config.json
-hugrsctl repo --source hf
-```
 
 ## .env 文件示例
 

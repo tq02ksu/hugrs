@@ -13,32 +13,26 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             asset_name: hugrs-x86_64-unknown-linux-musl
-            binary_name: hugrs
             archive_ext: tar.gz
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             asset_name: hugrs-aarch64-unknown-linux-musl
-            binary_name: hugrs
             archive_ext: tar.gz
           - os: macos-15-intel
             target: x86_64-apple-darwin
             asset_name: hugrs-x86_64-apple-darwin
-            binary_name: hugrs
             archive_ext: tar.gz
           - os: macos-15
             target: aarch64-apple-darwin
             asset_name: hugrs-aarch64-apple-darwin
-            binary_name: hugrs
             archive_ext: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             asset_name: hugrs-x86_64-pc-windows-msvc
-            binary_name: hugrs.exe
             archive_ext: zip
           - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             asset_name: hugrs-aarch64-pc-windows-msvc
-            binary_name: hugrs.exe
             archive_ext: zip
     runs-on: ${{ matrix.os }}
     permissions:
@@ -84,9 +78,10 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/${{ matrix.binary_name }}
+          cp target/${{ matrix.target }}/release/hugrs dist/hugrs
+          cp target/${{ matrix.target }}/release/hugrsctl dist/hugrsctl
           archive_name="hugrs-${RELEASE_VERSION}-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          tar -C dist -czf "$archive_name" ${{ matrix.binary_name }}
+          tar -C dist -czf "$archive_name" hugrs hugrsctl
           echo "ARCHIVE_NAME=$archive_name" >> "$GITHUB_ENV"
 
       - name: Package archive (Windows)
@@ -94,9 +89,10 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.binary_name }}"
+          Copy-Item "target/${{ matrix.target }}/release/hugrs.exe" "dist/hugrs.exe"
+          Copy-Item "target/${{ matrix.target }}/release/hugrsctl.exe" "dist/hugrsctl.exe"
           $archiveName = "hugrs-$env:RELEASE_VERSION-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          Compress-Archive -Path "dist/${{ matrix.binary_name }}" -DestinationPath $archiveName
+          Compress-Archive -Path "dist/hugrs.exe","dist/hugrsctl.exe" -DestinationPath $archiveName
           "ARCHIVE_NAME=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload packaged binary
