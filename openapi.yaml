@@ -786,16 +786,19 @@ components:
         file_count:
           type: integer
           format: int64
-        trunk_count:
+        chunk_count:
           type: integer
           format: int64
-        total_size:
+        original_bytes:
           type: integer
           format: int64
-        unique_size:
+        stored_bytes:
           type: integer
           format: int64
-        compression_ratio:
+        bytes_saved:
+          type: integer
+          format: int64
+        saved_percent:
           type: number
           format: double
         fetched_bytes:

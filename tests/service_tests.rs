@@ -101,6 +101,8 @@ async fn test_stats() {
 
     let stats = service.stats().await.unwrap();
     assert_eq!(stats.file_count, 0);
+    assert_eq!(stats.original_bytes, 0);
+    assert_eq!(stats.stored_bytes, 0);
 
     service
         .upload("f.bin", "test-repo", "hf", vec![5; 100])
@@ -110,6 +112,9 @@ async fn test_stats() {
     let stats = service.stats().await.unwrap();
     assert_eq!(stats.file_count, 1);
     assert_eq!(stats.repo_count, 1);
+    assert_eq!(stats.original_bytes, 100);
+    assert_eq!(stats.bytes_saved, 0);
+    assert_eq!(stats.saved_percent, 0.0);
 }
 
 #[tokio::test]

@@ -129,13 +129,14 @@ fn main() -> anyhow::Result<()> {
                 println!("Repos:             {}", stats.repo_count);
                 println!("Files:             {}", stats.file_count);
                 println!("Chunks:            {}", stats.chunk_count);
-                println!("Total size:        {} bytes", stats.total_size);
-                println!("Unique size:       {} bytes", stats.unique_size);
-                println!("Compression ratio: {:.2}%", stats.compression_ratio * 100.0);
+                println!("Original bytes:    {} bytes", stats.original_bytes);
+                println!("Stored bytes:      {} bytes", stats.stored_bytes);
+                println!("Bytes saved:       {} bytes", stats.bytes_saved);
+                println!("Saved percent:     {:.2}%", stats.saved_percent);
                 println!("Fetched (upstream): {}", format_bytes(stats.fetched_bytes));
                 println!("Served (client):    {}", format_bytes(stats.served_bytes));
                 if let Some(limit) = config.storage.max_size {
-                    let pct = (stats.total_size as u64 * 100)
+                    let pct = (stats.original_bytes as u64 * 100)
                         .checked_div(limit)
                         .unwrap_or(0);
                     println!("Max size:          {} bytes ({}% used)", limit, pct);
@@ -146,8 +147,8 @@ fn main() -> anyhow::Result<()> {
                 let count = service.gc().await?;
                 tracing::info!("Garbage collected {} chunks", count);
                 if let Some(limit) = config.storage.max_size {
-                    let stats = service.stats().await?;
-                    if stats.total_size as u64 > limit {
+                let stats = service.stats().await?;
+                    if stats.original_bytes as u64 > limit {
                         tracing::info!("Cache still exceeds max size, manual eviction needed");
                     }
                 }

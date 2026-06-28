@@ -105,6 +105,10 @@ fn test_stats() {
     let stats = store.get_stats().unwrap();
     assert_eq!(stats.file_count, 0);
     assert_eq!(stats.repo_count, 0);
+    assert_eq!(stats.original_bytes, 0);
+    assert_eq!(stats.stored_bytes, 0);
+    assert_eq!(stats.bytes_saved, 0);
+    assert_eq!(stats.saved_percent, 0.0);
 
     store.add_file("f.bin", "r", 500, "upload").unwrap();
     store.ensure_chunk("s1", "local", "s/1", 500, 500).unwrap();
@@ -112,6 +116,10 @@ fn test_stats() {
     let stats = store.get_stats().unwrap();
     assert_eq!(stats.file_count, 1);
     assert_eq!(stats.repo_count, 1);
+    assert_eq!(stats.original_bytes, 500);
+    assert_eq!(stats.stored_bytes, 500);
+    assert_eq!(stats.bytes_saved, 0);
+    assert_eq!(stats.saved_percent, 0.0);
 }
 
 #[test]

@@ -533,7 +533,7 @@ impl CacheService {
     async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
         loop {
             let stats = self.metadata.get_stats()?;
-            if stats.total_size as u64 <= max_size {
+            if stats.original_bytes as u64 <= max_size {
                 break;
             }
 
@@ -548,7 +548,7 @@ impl CacheService {
                 "Evicted repo '{}' ({} files, {} bytes total)",
                 victim_repo,
                 deleted,
-                stats.total_size
+                stats.original_bytes
             );
 
             let orphans = self.metadata.get_orphan_chunks()?;
