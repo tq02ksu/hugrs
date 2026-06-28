@@ -2,7 +2,11 @@
 
 ## Project Overview
 
-HugRS is a transparent caching proxy for HuggingFace model files. Files are split into 4MB trunks, each keyed by SHA256. Provides CLI management and HTTP API access.
+HugRS is a transparent caching proxy for HuggingFace and ModelScope model files. Files are split into 4MB chunks, each keyed by SHA256. The project now provides:
+
+- `hugrs`: zero-argument daemon
+- `hugrsctl`: management client for service, repo, and file operations
+- control-plane admin API under `/_hugrs/...`
 
 ### Core Design Principles
 
@@ -11,8 +15,8 @@ HugRS is a transparent caching proxy for HuggingFace model files. Files are spli
 - **Redirect transparency**: 302 responses are followed internally. Headers from the 302 (X-Repo-Commit, X-Linked-Size, X-Linked-ETag) and final 200 (Content-Length, ETag, Content-Type) are merged. The client always receives 200 with the combined metadata.
 - **Metadata first**: HEAD requests cache file metadata (size, etag, x-repo-commit) in the `files` table without downloading content. Subsequent GET/POST uses cached metadata for Range/Content-Length.
 - **No guessing**: never invent content-type, filenames, or other response metadata. Take it from upstream or don't include it. There is no fallback default for content-type like `application/octet-stream` — every byte of response metadata must trace back to an upstream source.
-- **Partial downloads resume**: interrupted GET downloads restart from the last completed trunk. `file_trunks` table tracks which chunks are cached.
-- **Immutable trunks**: trunk data is keyed by SHA256 and never modified. Same trunk (same hash) used across multiple files.
+- **Partial downloads resume**: interrupted GET downloads restart from the last completed chunk. `file_chunks` tracks which chunks are cached.
+- **Immutable chunks**: chunk data is keyed by SHA256 and never modified. Same chunk (same hash) is reused across multiple files.
 
 ## Tech Stack
 
@@ -31,11 +35,14 @@ HugRS is a transparent caching proxy for HuggingFace model files. Files are spli
 # Build
 cargo build
 
-# Run (HTTP server)
-cargo run -- serve
+# Run daemon
+cargo run
+
+# Run management client
+cargo run --bin hugrsctl -- service
 
 # CLI help
-cargo run -- --help
+cargo run --bin hugrsctl -- --help
 
 # Tests
 cargo test
@@ -63,22 +70,48 @@ cargo build --release
 
 ## Documentation
 
-- **Bilingual README & CONFIG**: `README.md` and `docs/CONFIG.md` have Chinese counterparts `README_zh.md` and `docs/CONFIG_zh.md`. When modifying either file, sync the same change to its counterpart. English body + Chinese blockquote, or Chinese body + English blockquote — same content in both languages.
+- **Bilingual docs must stay in sync**:
+  - `README.md` ↔ `README_zh.md`
+  - `docs/CONFIG.md` ↔ `docs/CONFIG_zh.md`
+  - `docs/CLI.md` ↔ `docs/CLI_zh.md`
+  When modifying either file in a pair, sync the same change to its counterpart.
+
+## Release Notes
+
+- Release version currently follows git tags like `v0.4.0`
+- `.github/workflows/release.yml` is tag-driven: pushing `v*` triggers binary and Docker release jobs
+- Release artifacts must include both `hugrs` and `hugrsctl`
+- Docker image must continue to ship both binaries, with `hugrs` as the entrypoint
+- When cutting a release, update:
+  - `Cargo.toml` version
+  - `Cargo.lock`
+  - Docker image tags in `README.md` and `README_zh.md`
+  - any release-facing docs that mention the current version
+- Before tagging a release, verify at minimum:
+  - `cargo fmt -- --check`
+  - `cargo clippy -- -D warnings`
+  - `cargo test`
 
 ## Project Structure
 
 ```
 src/
-├── main.rs        # Entry point
-├── cli.rs         # CLI command definitions
-├── config.rs      # Configuration
-├── server.rs      # HTTP server (axum)
-├── service.rs     # Business logic
-├── chunker.rs     # File split/assemble
-├── metadata.rs    # SQLite operations
+├── main.rs            # `hugrs` daemon entry point
+├── bin/hugrsctl.rs    # `hugrsctl` binary entry point
+├── hugrsctl_cli.rs    # Management CLI command definitions and formatting
+├── admin_client.rs    # Client for the control-plane admin API
+├── control.rs         # Control-plane request/response types
+├── config.rs          # Configuration
+├── server.rs          # HTTP server (axum)
+├── service.rs         # Business logic
+├── session.rs         # Download session and prefetch coordination
+├── chunker.rs         # File split/assemble
+├── metadata.rs        # SQLite operations
+├── git.rs             # Git/LFS proxy support
 ├── storage/
-│   ├── mod.rs     # StorageBackend trait
-│   ├── local.rs   # Local FS backend
-│   └── s3.rs      # S3 backend
-└── hf.rs          # HuggingFace Hub integration
+│   ├── mod.rs         # StorageBackend trait
+│   ├── local.rs       # Local FS backend
+│   └── s3.rs          # S3 backend
+├── migrations/        # SQL migrations
+└── hf.rs              # HuggingFace Hub integration
 ```

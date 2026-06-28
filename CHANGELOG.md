@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.4.0] - 2026-06-28
+
+### Added
+- `hugrsctl` management client as a separate binary
+- Control-plane admin API under `/_hugrs/...`
+- Admin token generation and control-plane authentication
+- Repo/file management commands with source-aware filtering and delete semantics
+- GC dry-run and batched orphan chunk reclamation
+- Orphan chunk tracking via `orphaned_at`
+- Dedicated CLI documentation in `docs/CLI.md` and `docs/CLI_zh.md`
+
+### Changed
+- `hugrs` is now a zero-argument daemon entrypoint
+- Removed the old in-process management CLI from `hugrs`
+- Default management flow now uses `hugrsctl service|repo|file`
+- Human-readable default output for `hugrsctl`, with aligned text formatting for service status/stats/GC
+- Release packaging now includes both `hugrs` and `hugrsctl`
+- Docker image now ships both binaries and starts `hugrs` directly
+
+### Fixed
+- Eliminate multi-writer metadata inconsistencies by moving management operations behind the serving process
+- Delete operations now mark zero-ref chunks as orphaned instead of deleting backend data immediately
+- Release workflow updated for the current two-binary layout
+
+### Docs
+- Reworked README for user-facing startup and management usage
+- Separated CLI usage from configuration documentation
+- Clarified platform-specific cache paths, including macOS defaults
+
+### CI
+- Removed the unused coverage workflow
+
 ## [0.3.1] - 2026-06-26
 
 ### Added
