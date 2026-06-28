@@ -15,14 +15,14 @@ High-performance HuggingFace & ModelScope model mirror. Prefetch-driven, content
 ## Docker
 
 ```bash
-docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.2.0
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.3.1
 
 # custom endpoint + persistent cache (named volume)
 docker volume create hugrs-cache
 docker run -p 3000:3000 \
   -v hugrs-cache:/home/hugrs/.cache/hugrs \
-  ghcr.io/tq02ksu/hugrs:0.2.0 \
-  serve --hf-endpoint https://hf-mirror.com
+  -e HUGRS_HF_ENDPOINT=https://hf-mirror.com \
+  ghcr.io/tq02ksu/hugrs:0.3.1
 ```
 
 Runs as non-root `hugrs` on Debian 13 (trixie-slim).
@@ -31,14 +31,18 @@ Runs as non-root `hugrs` on Debian 13 (trixie-slim).
 
 ```bash
 cargo build --release
-cargo run -- serve
-cargo run -- serve --hf-endpoint https://hf-mirror.com
-cargo run -- serve --ms-endpoint https://modelscope.cn
-cargo run -- pull bert-base-uncased
-cargo run -- list
-cargo run -- stats
-cargo run -- gc
+cargo run
+HUGRS_HF_ENDPOINT=https://hf-mirror.com cargo run
+HUGRS_MS_ENDPOINT=https://modelscope.cn cargo run
+
+# management client
+cargo run --bin hugrsctl -- service
+cargo run --bin hugrsctl -- repo
+cargo run --bin hugrsctl -- file
+cargo run --bin hugrsctl -- service gc --dry-run
 ```
+
+`hugrs` is the daemon. `hugrsctl` is the management client. Cache management is limited to service status, repo/file inspection, delete operations, and GC; `chunk` remains an internal implementation detail.
 
 ## Client Usage
 
@@ -92,14 +96,10 @@ Point TEI at HugRS to cache model downloads:
 
 ```bash
 docker run --rm --gpus all -p 8002:80 \
-  -e HF_ENDPOINT=http://your-hugrs-host:3000 \
-  ghcr.io/huggingface/text-embeddings-inference:1.9.3 \
-  --model-id BAAI/bge-reranker-v2-m3
+  -e HF_ENDPOINT=http://localhost:3000 \
+  ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
+  --model-id Qwen/Qwen3-Embedding-0.6B
 ```
-
-Replace `your-hugrs-host` with the HugRS server address. TEI reads `HF_ENDPOINT` to resolve model files — HugRS caches them on first pull and serves subsequent requests locally.
-
-> TEI / TEI 文本嵌入推理：通过 `-e HF_ENDPOINT=http://your-hugrs-host:3000` 将模型下载指向 HugRS 代理，首次下载自动缓存，后续请求本地命中。将 `your-hugrs-host` 替换为 HugRS 服务器地址。
 
 ## HTTP API
 
@@ -107,15 +107,22 @@ Replace `your-hugrs-host` with the HugRS server address. TEI reads `HF_ENDPOINT`
 
 ## Storage Layout
 
-4MB trunks, SHA256-addressed:
+4MB chunks, SHA256-addressed:
 
 ```
-.cache/hugrs/trunks/{sha256[0..2]}/{sha256[2..4]}/{sha256}
+.cache/hugrs/chunks/{sha256[0..2]}/{sha256[2..4]}/{sha256}
 ```
 
 ## Configuration
 
-Priority: CLI flags > env vars > `.env` > `hugrs.toml` > defaults
+Priority: env vars > `.env` > `hugrs.toml` > defaults
+
+Management defaults:
+
+- control API namespace: `/_hugrs/...`
+- admin token file: `~/.cache/hugrs/admin.token`
+
+`hugrsctl` defaults to `http://127.0.0.1:3000`, can override the server address with `--endpoint` or `HUGRS_CONTROL_ENDPOINT`, and resolves the admin token from `--admin-token`, `HUGRS_ADMIN_TOKEN`, or `~/.cache/hugrs/admin.token`. Delete removes file-cache references; `hugrsctl service gc` performs batched orphan chunk reclamation.
 
 [📖 Full Configuration Docs →](docs/CONFIG.md)
 

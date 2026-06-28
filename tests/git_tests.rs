@@ -151,6 +151,10 @@ fn build_git_router(upstream: &str, ms_upstream: Option<&str>, dir: &TempDir) ->
             host: "127.0.0.1".into(),
             port: 3000,
         },
+        admin: hugrs::config::AdminConfig {
+            token: Some("test-admin-token".into()),
+            token_file: dir.path().join("admin.token"),
+        },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
             local_root: dir.path().join("chunks"),
@@ -194,6 +198,7 @@ fn build_git_router(upstream: &str, ms_upstream: Option<&str>, dir: &TempDir) ->
     let state = hugrs::server::AppState {
         service: Arc::new(TokioMutex::new(service)),
         config: Arc::new(config),
+        admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),
         head_client,
         ms_http_client: http_client,
@@ -263,6 +268,10 @@ fn build_git_router_with_token(
             host: "127.0.0.1".into(),
             port: 3000,
         },
+        admin: hugrs::config::AdminConfig {
+            token: Some("test-admin-token".into()),
+            token_file: dir.path().join("admin.token"),
+        },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
             local_root: dir.path().join("chunks"),
@@ -306,6 +315,7 @@ fn build_git_router_with_token(
     let state = hugrs::server::AppState {
         service: Arc::new(TokioMutex::new(service)),
         config: Arc::new(config),
+        admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),
         head_client,
         ms_http_client: http_client,
@@ -1126,6 +1136,10 @@ async fn test_git_info_refs_ms_uses_separate_upstream() {
             host: "127.0.0.1".into(),
             port: 3000,
         },
+        admin: hugrs::config::AdminConfig {
+            token: Some("test-admin-token".into()),
+            token_file: dir.path().join("admin.token"),
+        },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
             local_root: dir.path().join("chunks"),
@@ -1169,6 +1183,7 @@ async fn test_git_info_refs_ms_uses_separate_upstream() {
     let state = hugrs::server::AppState {
         service: Arc::new(TokioMutex::new(service)),
         config: Arc::new(config),
+        admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),
         head_client,
         ms_http_client: http_client,

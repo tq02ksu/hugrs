@@ -16,6 +16,25 @@ pub(crate) fn use_get_for_first_hop_probe(source: &str, url: &str) -> bool {
 
 pub type ByteStream = ReceiverStream<Result<Bytes, anyhow::Error>>;
 
+#[derive(Debug, Clone, Default)]
+pub struct DeleteResult {
+    pub deleted_files: usize,
+    pub sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GcPreview {
+    pub candidate_chunks: usize,
+    pub candidate_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GcResult {
+    pub deleted_chunks: usize,
+    pub reclaimed_bytes: u64,
+    pub skipped_chunks: usize,
+}
+
 struct DownloadedChunk {
     index: usize,
     sha256: String,
@@ -510,6 +529,63 @@ impl CacheService {
         self.metadata.delete_file(name, source)
     }
 
+    pub async fn delete_file_all_sources(
+        &self,
+        repo: &str,
+        file: &str,
+        source: Option<&str>,
+    ) -> anyhow::Result<DeleteResult> {
+        let files = self.metadata.list_files()?;
+        let mut deleted_files = 0usize;
+        let mut sources = std::collections::BTreeSet::new();
+
+        for entry in files {
+            if entry.repo != repo || entry.name != file {
+                continue;
+            }
+            if source.is_some() && source != Some(entry.source.as_str()) {
+                continue;
+            }
+            if self.metadata.delete_file(&entry.name, &entry.source)? {
+                deleted_files += 1;
+                sources.insert(entry.source);
+            }
+        }
+
+        Ok(DeleteResult {
+            deleted_files,
+            sources: sources.into_iter().collect(),
+        })
+    }
+
+    pub async fn delete_repo_all_sources(
+        &self,
+        repo: &str,
+        source: Option<&str>,
+    ) -> anyhow::Result<DeleteResult> {
+        let files = self.metadata.list_files()?;
+        let mut deleted_files = 0usize;
+        let mut sources = std::collections::BTreeSet::new();
+
+        for entry in files {
+            if entry.repo != repo {
+                continue;
+            }
+            if source.is_some() && source != Some(entry.source.as_str()) {
+                continue;
+            }
+            if self.metadata.delete_file(&entry.name, &entry.source)? {
+                deleted_files += 1;
+                sources.insert(entry.source);
+            }
+        }
+
+        Ok(DeleteResult {
+            deleted_files,
+            sources: sources.into_iter().collect(),
+        })
+    }
+
     pub async fn list(&self) -> anyhow::Result<Vec<File>> {
         self.metadata.list_files()
     }
@@ -521,13 +597,37 @@ impl CacheService {
         Ok(stats)
     }
 
-    pub async fn gc(&self) -> anyhow::Result<usize> {
-        let orphans = self.metadata.get_orphan_chunks()?;
-        let count = orphans.len();
-        for sha256 in &orphans {
-            self.backend.delete(sha256).await?;
+    pub async fn gc_dry_run(&self) -> anyhow::Result<GcPreview> {
+        let (candidate_chunks, candidate_bytes) = self.metadata.list_orphan_chunks_stats()?;
+        Ok(GcPreview {
+            candidate_chunks: candidate_chunks as usize,
+            candidate_bytes: candidate_bytes as u64,
+        })
+    }
+
+    pub async fn gc_execute(&self, batch_size: usize) -> anyhow::Result<GcResult> {
+        let limit = batch_size.max(1);
+        let orphans = self.metadata.list_orphan_chunks_batch(limit)?;
+        let mut result = GcResult::default();
+
+        for chunk in orphans {
+            if chunk.ref_count != 0 {
+                result.skipped_chunks += 1;
+                continue;
+            }
+            self.backend.delete(&chunk.sha256).await?;
+            let reclaimed = chunk.compressed_size.unwrap_or(chunk.size) as u64;
+            if self.metadata.delete_chunk(&chunk.sha256)? {
+                result.deleted_chunks += 1;
+                result.reclaimed_bytes += reclaimed;
+            }
         }
-        Ok(count)
+
+        Ok(result)
+    }
+
+    pub async fn gc(&self) -> anyhow::Result<usize> {
+        Ok(self.gc_execute(usize::MAX).await?.deleted_chunks)
     }
 
     async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
@@ -551,10 +651,7 @@ impl CacheService {
                 stats.original_bytes
             );
 
-            let orphans = self.metadata.get_orphan_chunks()?;
-            for sha256 in &orphans {
-                self.backend.delete(sha256).await?;
-            }
+            let _ = self.gc_execute(1_000).await?;
         }
         Ok(())
     }

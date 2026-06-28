@@ -1,4 +1,9 @@
 use crate::config::Config;
+use crate::control::{
+    AuthInfo, CacheInfo, DeleteResponse, FileListItem, FileListResponse, FileShowResponse,
+    GcPreviewResponse, GcRequest, GcResultResponse, RepoListItem, RepoListResponse,
+    RepoShowResponse, ServiceStatsResponse, ServiceStatusResponse, SourceInfo, SourcesInfo,
+};
 use crate::git;
 use crate::hf;
 use crate::service::CacheService;
@@ -11,21 +16,24 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub async fn run(
-    config: Config,
+    mut config: Config,
     service: CacheService,
     ms_http_client: reqwest::Client,
     ms_head_client: reqwest::Client,
 ) -> anyhow::Result<()> {
+    let admin_token = config.ensure_admin_token()?;
     let http_client = hf::build_client(&config)?;
     let head_client = hf::build_head_client(&config)?;
     let app_state = AppState {
         service: Arc::new(Mutex::new(service)),
         config: Arc::new(config),
+        admin_token: Arc::new(admin_token),
         http_client: Arc::new(http_client),
         head_client: Arc::new(head_client),
         ms_http_client: Arc::new(ms_http_client),
@@ -37,7 +45,16 @@ pub async fn run(
         app_state.config.server.host, app_state.config.server.port
     );
 
-    let app = Router::new()
+    let app = app_router(app_state);
+
+    tracing::info!("Listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+pub fn app_router(app_state: AppState) -> Router {
+    Router::new()
         .route("/", get(root))
         .route("/api/whoami-v2", get(whoami))
         // Legacy unprefixed HF routes (backward compat)
@@ -125,19 +142,28 @@ pub async fn run(
         )
         .route("/api/stats", get(stats))
         .route("/api/agent-harnesses", get(agent_harnesses))
+        .route("/_hugrs/service", get(control_service_status))
+        .route("/_hugrs/service/stats", get(control_service_stats))
+        .route("/_hugrs/service/gc", post(control_service_gc))
+        .route("/_hugrs/repos", get(control_repos_list))
+        .route(
+            "/_hugrs/repos/{*repo}",
+            get(control_repo_show).delete(control_repo_delete),
+        )
+        .route(
+            "/_hugrs/files",
+            get(control_files_list).delete(control_file_delete),
+        )
+        .route("/_hugrs/files/show", get(control_file_show))
         .layer(middleware::from_fn(log_request))
-        .with_state(app_state);
-
-    tracing::info!("Listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
-    Ok(())
+        .with_state(app_state)
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub service: Arc<Mutex<CacheService>>,
     pub config: Arc<Config>,
+    pub admin_token: Arc<String>,
     pub http_client: Arc<reqwest::Client>,
     pub head_client: Arc<reqwest::Client>,
     pub ms_http_client: Arc<reqwest::Client>,
@@ -786,6 +812,318 @@ async fn agent_harnesses(State(state): State<AppState>) -> Result<Response, AppE
     proxy_json(&state, "hf", &url).await
 }
 
+#[derive(serde::Deserialize)]
+struct SourceQuery {
+    source: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FileQuery {
+    repo: String,
+    file: String,
+    source: Option<String>,
+}
+
+fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> {
+    let value = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let expected = format!("Bearer {}", state.admin_token.as_str());
+    if value == expected {
+        Ok(())
+    } else {
+        Err(AppError::Unauthorized)
+    }
+}
+
+fn aggregate_files(files: &[crate::metadata::File]) -> Vec<FileListItem> {
+    let mut grouped: BTreeMap<(String, String), Vec<crate::metadata::File>> = BTreeMap::new();
+    for file in files {
+        grouped
+            .entry((file.repo.clone(), file.name.clone()))
+            .or_default()
+            .push(file.clone());
+    }
+
+    grouped
+        .into_iter()
+        .map(|((repo, file), entries)| {
+            let first = &entries[0];
+            FileListItem {
+                repo,
+                file,
+                sources: entries.iter().map(|f| f.source.clone()).collect(),
+                size: first.total_size,
+                content_type: first.content_type.clone(),
+                last_accessed: entries
+                    .iter()
+                    .map(|f| f.last_accessed.clone())
+                    .max()
+                    .unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+async fn control_service_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ServiceStatusResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    Ok(Json(ServiceStatusResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        status: "ok".to_string(),
+        endpoint: format!(
+            "http://{}:{}",
+            state.config.server.host, state.config.server.port
+        ),
+        cache: CacheInfo {
+            db_path: state.config.database.path.display().to_string(),
+            root: state.config.storage.local_root.display().to_string(),
+            max_size: state.config.storage.max_size,
+        },
+        sources: SourcesInfo {
+            hf: SourceInfo {
+                enabled: true,
+                endpoint: state.config.huggingface.endpoint.clone(),
+            },
+            ms: SourceInfo {
+                enabled: true,
+                endpoint: state.config.modelscope.endpoint.clone(),
+            },
+        },
+        auth: AuthInfo {
+            admin_token_configured: !state.admin_token.is_empty(),
+            admin_token_file: state.config.admin.token_file.display().to_string(),
+        },
+    }))
+}
+
+async fn control_service_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ServiceStatsResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let stats = service.stats().await.map_err(AppError::Anyhow)?;
+    Ok(Json(ServiceStatsResponse {
+        repos: stats.repo_count,
+        files: stats.file_count,
+        logical_bytes: stats.original_bytes,
+        stored_bytes: stats.stored_bytes,
+        saved_bytes: stats.bytes_saved,
+        saved_percent: stats.saved_percent,
+        fetched_bytes: stats.fetched_bytes,
+        served_bytes: stats.served_bytes,
+    }))
+}
+
+async fn control_service_gc(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<GcRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    if req.dry_run {
+        let preview = service.gc_dry_run().await.map_err(AppError::Anyhow)?;
+        Ok(Json(
+            serde_json::to_value(GcPreviewResponse {
+                candidate_chunks: preview.candidate_chunks,
+                candidate_bytes: preview.candidate_bytes,
+            })
+            .map_err(|e| AppError::Anyhow(e.into()))?,
+        ))
+    } else {
+        let result = service
+            .gc_execute(req.batch_size.unwrap_or(100))
+            .await
+            .map_err(AppError::Anyhow)?;
+        Ok(Json(
+            serde_json::to_value(GcResultResponse {
+                deleted_chunks: result.deleted_chunks,
+                reclaimed_bytes: result.reclaimed_bytes,
+                skipped_chunks: result.skipped_chunks,
+            })
+            .map_err(|e| AppError::Anyhow(e.into()))?,
+        ))
+    }
+}
+
+async fn control_repos_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<RepoListResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let mut grouped: BTreeMap<String, Vec<crate::metadata::File>> = BTreeMap::new();
+    for file in files {
+        if query.source.as_deref().is_some()
+            && query.source.as_deref() != Some(file.source.as_str())
+        {
+            continue;
+        }
+        grouped.entry(file.repo.clone()).or_default().push(file);
+    }
+    let items: Vec<RepoListItem> = grouped
+        .into_iter()
+        .map(|(repo, entries)| RepoListItem {
+            repo,
+            sources: entries
+                .iter()
+                .map(|f| f.source.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            files: entries.len(),
+            logical_bytes: entries.iter().map(|f| f.total_size).sum(),
+            last_accessed: entries
+                .iter()
+                .map(|f| f.last_accessed.clone())
+                .max()
+                .unwrap_or_default(),
+        })
+        .collect();
+    Ok(Json(RepoListResponse {
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn control_repo_show(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(repo): Path<String>,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<RepoShowResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let matched: Vec<_> = files
+        .into_iter()
+        .filter(|f| f.repo == repo)
+        .filter(|f| {
+            query.source.as_deref().is_none() || query.source.as_deref() == Some(f.source.as_str())
+        })
+        .collect();
+    if matched.is_empty() {
+        return Err(AppError::NotFound(format!("repo not found: {}", repo)));
+    }
+    let items = aggregate_files(&matched);
+    let sources = matched
+        .iter()
+        .map(|f| f.source.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(Json(RepoShowResponse {
+        repo,
+        sources,
+        files: items.len(),
+        logical_bytes: matched.iter().map(|f| f.total_size).sum(),
+        last_accessed: matched
+            .iter()
+            .map(|f| f.last_accessed.clone())
+            .max()
+            .unwrap_or_default(),
+        items,
+    }))
+}
+
+async fn control_repo_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(repo): Path<String>,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<DeleteResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let result = service
+        .delete_repo_all_sources(&repo, query.source.as_deref())
+        .await
+        .map_err(AppError::Anyhow)?;
+    Ok(Json(DeleteResponse {
+        deleted: result.deleted_files > 0,
+        deleted_files: result.deleted_files,
+        sources: result.sources,
+    }))
+}
+
+async fn control_files_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SourceQuery>,
+) -> Result<Json<FileListResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let filtered: Vec<_> = files
+        .into_iter()
+        .filter(|f| {
+            query.source.as_deref().is_none() || query.source.as_deref() == Some(f.source.as_str())
+        })
+        .collect();
+    let items = aggregate_files(&filtered);
+    Ok(Json(FileListResponse {
+        total: items.len(),
+        items,
+    }))
+}
+
+async fn control_file_show(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FileQuery>,
+) -> Result<Json<FileShowResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let matched: Vec<_> = files
+        .into_iter()
+        .filter(|f| f.repo == query.repo && f.name == query.file)
+        .filter(|f| {
+            query.source.as_deref().is_none() || query.source.as_deref() == Some(f.source.as_str())
+        })
+        .collect();
+    if matched.is_empty() {
+        return Err(AppError::NotFound(format!(
+            "file not found: {}/{}",
+            query.repo, query.file
+        )));
+    }
+    let first = &matched[0];
+    let sources = matched.iter().map(|f| f.source.clone()).collect();
+    Ok(Json(FileShowResponse {
+        repo: query.repo,
+        file: query.file,
+        sources,
+        size: first.total_size,
+        content_type: first.content_type.clone(),
+        last_accessed: first.last_accessed.clone(),
+    }))
+}
+
+async fn control_file_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FileQuery>,
+) -> Result<Json<DeleteResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let result = service
+        .delete_file_all_sources(&query.repo, &query.file, query.source.as_deref())
+        .await
+        .map_err(AppError::Anyhow)?;
+    Ok(Json(DeleteResponse {
+        deleted: result.deleted_files > 0,
+        deleted_files: result.deleted_files,
+        sources: result.sources,
+    }))
+}
+
 async fn proxy_json(state: &AppState, source: &str, url: &str) -> Result<Response, AppError> {
     let (_, client, _) = hub_config(state, source);
     let mut req = client.get(url);
@@ -808,6 +1146,8 @@ async fn proxy_json(state: &AppState, source: &str, url: &str) -> Result<Respons
 
 pub enum AppError {
     Anyhow(anyhow::Error),
+    Unauthorized,
+    NotFound(String),
 }
 
 impl From<anyhow::Error> for AppError {
@@ -823,6 +1163,8 @@ impl IntoResponse for AppError {
                 tracing::error!("{}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e))
             }
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
+            AppError::NotFound(message) => (StatusCode::NOT_FOUND, message.clone()),
         };
         let body = Json(ErrorResponse { error: message });
         (status, body).into_response()

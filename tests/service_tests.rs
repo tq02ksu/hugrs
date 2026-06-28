@@ -294,3 +294,193 @@ async fn test_upload_preserves_headers() {
         "content_type should be preserved after upload"
     );
 }
+
+#[tokio::test]
+async fn test_delete_marks_zero_ref_chunks_orphaned() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata.clone(),
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+    );
+
+    service
+        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+
+    let deleted = service
+        .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
+        .await
+        .unwrap();
+    assert_eq!(deleted.deleted_files, 1);
+
+    let orphans = metadata.get_orphan_chunks().unwrap();
+    assert_eq!(orphans.len(), 1);
+    assert_eq!(orphans[0].ref_count, 0);
+    assert!(orphans[0].orphaned_at.is_some());
+}
+
+#[tokio::test]
+async fn test_delete_does_not_remove_backend_data_immediately() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata.clone(),
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+    );
+
+    service
+        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+
+    let file = metadata.get_file_by_name("x.bin", "hf").unwrap().unwrap();
+    let sha = metadata.get_file_chunks(file.id).unwrap()[0].sha256.clone();
+
+    service
+        .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
+        .await
+        .unwrap();
+
+    assert!(service.backend_exists(&sha).await.unwrap());
+}
+
+#[tokio::test]
+async fn test_delete_without_source_removes_all_sources() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata.clone(),
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+    );
+
+    service
+        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+    service
+        .upload("x.bin", "repo-a", "ms", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+
+    let deleted = service
+        .delete_file_all_sources("repo-a", "x.bin", None)
+        .await
+        .unwrap();
+    assert_eq!(deleted.deleted_files, 2);
+
+    assert!(metadata.get_file_by_name("x.bin", "hf").unwrap().is_none());
+    assert!(metadata.get_file_by_name("x.bin", "ms").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_gc_dry_run_reports_orphan_candidates() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+    );
+
+    service
+        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+    service
+        .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
+        .await
+        .unwrap();
+
+    let preview = service.gc_dry_run().await.unwrap();
+    assert_eq!(preview.candidate_chunks, 1);
+    assert!(preview.candidate_bytes > 0);
+}
+
+#[tokio::test]
+async fn test_gc_execute_reclaims_orphan_backend_objects() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata.clone(),
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+    );
+
+    service
+        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+
+    let file = metadata.get_file_by_name("x.bin", "hf").unwrap().unwrap();
+    let sha = metadata.get_file_chunks(file.id).unwrap()[0].sha256.clone();
+
+    service
+        .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
+        .await
+        .unwrap();
+
+    let result = service.gc_execute(100).await.unwrap();
+    assert_eq!(result.deleted_chunks, 1);
+    assert!(result.reclaimed_bytes > 0);
+    assert!(!service.backend_exists(&sha).await.unwrap());
+}

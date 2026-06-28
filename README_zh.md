@@ -15,14 +15,14 @@
 ## Docker
 
 ```bash
-docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.2.0
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.3.1
 
 # 指定镜像源 + 持久化缓存（使用命名卷）
 docker volume create hugrs-cache
 docker run -p 3000:3000 \
   -v hugrs-cache:/home/hugrs/.cache/hugrs \
-  ghcr.io/tq02ksu/hugrs:0.2.0 \
-  serve --hf-endpoint https://hf-mirror.com
+  -e HUGRS_HF_ENDPOINT=https://hf-mirror.com \
+  ghcr.io/tq02ksu/hugrs:0.3.1
 ```
 
 运行在 Debian 13 (trixie-slim)，非 root 用户 `hugrs`。
@@ -31,14 +31,18 @@ docker run -p 3000:3000 \
 
 ```bash
 cargo build --release
-cargo run -- serve                          # 启动服务
-cargo run -- serve --hf-endpoint https://hf-mirror.com
-cargo run -- serve --ms-endpoint https://modelscope.cn
-cargo run -- pull bert-base-uncased         # 从 HF Hub 拉取
-cargo run -- list                           # 列出缓存
-cargo run -- stats                          # 缓存统计
-cargo run -- gc                             # 垃圾回收
+cargo run                                   # 启动服务
+HUGRS_HF_ENDPOINT=https://hf-mirror.com cargo run
+HUGRS_MS_ENDPOINT=https://modelscope.cn cargo run
+
+# 管理客户端
+cargo run --bin hugrsctl -- service
+cargo run --bin hugrsctl -- repo
+cargo run --bin hugrsctl -- file
+cargo run --bin hugrsctl -- service gc --dry-run
 ```
+
+`hugrs` 是守护进程，`hugrsctl` 是管理客户端。管理面只暴露服务状态、repo/file 查看、删除和 GC；`chunk` 保持为内部实现细节，不面向用户。
 
 ## 客户端使用
 
@@ -93,13 +97,9 @@ git clone http://127.0.0.1:3000/ms/qwen/Qwen3.5-0.8B
 ```bash
 docker run --rm --gpus all -p 8002:80 \
   -e HF_ENDPOINT=http://your-hugrs-host:3000 \
-  ghcr.io/huggingface/text-embeddings-inference:1.9.3 \
-  --model-id BAAI/bge-reranker-v2-m3
+  ghcr.io/huggingface/text-embeddings-inference:cpu-latest \
+  --model-id Qwen/Qwen3-Embedding-0.6B
 ```
-
-将 `your-hugrs-host` 替换为 HugRS 服务器地址。TEI 通过 `HF_ENDPOINT` 解析模型文件 — HugRS 首次拉取时自动缓存，后续请求本地命中。
-
-> TEI / Text Embeddings Inference: point TEI at HugRS via `-e HF_ENDPOINT=http://your-hugrs-host:3000`. Models are cached on first pull, served locally thereafter. Replace `your-hugrs-host` with your HugRS server address.
 
 ## HTTP API
 
@@ -110,14 +110,21 @@ docker run --rm --gpus all -p 8002:80 \
 4MB 分块，SHA256 寻址：
 
 ```
-.cache/hugrs/trunks/{sha256[0..2]}/{sha256[2..4]}/{sha256}
+.cache/hugrs/chunks/{sha256[0..2]}/{sha256[2..4]}/{sha256}
 ```
 
 ## 配置
 
-优先级: CLI flags > env vars > `.env` > `hugrs.toml` > defaults
+优先级: env vars > `.env` > `hugrs.toml` > defaults
 
-[📖 完整配置文档 →](docs/CONFIG.md)
+管理默认值：
+
+- 控制面路径前缀：`/_hugrs/...`
+- admin token 文件：`~/.cache/hugrs/admin.token`
+
+`hugrsctl` 默认连接 `http://127.0.0.1:3000`，也可通过 `--endpoint` 或 `HUGRS_CONTROL_ENDPOINT` 覆盖服务地址，admin token 则按 `--admin-token`、`HUGRS_ADMIN_TOKEN`、`~/.cache/hugrs/admin.token` 的顺序解析。删除只移除文件缓存引用；`hugrsctl service gc` 负责按批回收 orphan chunk。
+
+[📖 完整配置文档 →](docs/CONFIG_zh.md)
 
 ## License
 

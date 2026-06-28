@@ -5,8 +5,8 @@
 Config is loaded in this order, **later overrides earlier**:
 
 ```
-defaults  →  hugrs.toml  →  .env  →  env vars  →  CLI flags
-(lowest)                                                (highest)
+defaults  →  hugrs.toml  →  .env  →  env vars
+(lowest)                                   (highest)
 ```
 
 ## Configuration Methods
@@ -14,10 +14,10 @@ defaults  →  hugrs.toml  →  .env  →  env vars  →  CLI flags
 | Method | Format | Notes |
 |--------|--------|-------|
 | Defaults | — | Works out of the box |
-| `hugrs.toml` | TOML | Tries `./hugrs.toml`, then `~/.config/hugrs/hugrs.toml`. Use `-c` to override |
+| `hugrs.toml` | TOML | Tries `./hugrs.toml`, then `~/.config/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | Environment file in the current directory |
 | Env vars | `HUGRS_*` | System environment variables |
-| CLI flags | `--xxx` | Global flags, apply to all subcommands |
+| `hugrsctl` flags | `--xxx` | Management client only; does not configure the daemon |
 
 ### Example: 4 ways to set `max_size`
 
@@ -32,8 +32,8 @@ HUGRS_MAX_SIZE=10737418240
 # 3. Env var
 export HUGRS_MAX_SIZE=10737418240
 
-# 4. CLI flag
-hugrs --max-size 10737418240 serve
+# 4. not supported by `hugrs`
+# `hugrs` itself has no CLI flags; configure the daemon with env vars or hugrs.toml instead
 ```
 
 ---
@@ -42,52 +42,59 @@ hugrs --max-size 10737418240 serve
 
 ### `[storage]` — Storage
 
-| Key | Type | Default | Env Var | CLI Flag | Description |
-|-----|------|---------|---------|----------|-------------|
-| `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | `--storage-backend` | Storage backend: `local` or `s3` |
-| `local_root` | path | `~/.cache/hugrs/trunks` | `HUGRS_LOCAL_ROOT` | `--local-root` | Local storage root directory |
-| `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | `--s3-bucket` | S3 bucket name (required for `backend=s3`) |
-| `s3_region` | string | — | `HUGRS_S3_REGION` | `--s3-region` | S3 region (required for `backend=s3`) |
-| `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | `--s3-prefix` | S3 key prefix, e.g. `"hugrs/cache"` |
-| `s3_endpoint` | string | — | `HUGRS_S3_ENDPOINT` | `--s3-endpoint` | S3-compatible endpoint URL (MinIO, etc.) |
-| `max_size` | integer | — | `HUGRS_MAX_SIZE` | `--max-size` | Max disk usage in bytes. Triggers LRU eviction when exceeded |
-| `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | `--compression` | Trunk compression: `zstd` or `none` |
-| `prefetch_depth` | integer | `0` (auto=CPU cores) | `HUGRS_PREFETCH_DEPTH` | `--prefetch-depth` | Cache read prefetch depth. `0`=auto (max 16). Range 1–16 |
-| `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | `--prefetch-budget-base` | Base chunk prefetch budget for streaming sessions. Effective budgets are `base`, `base/2`, `base/4` for 1, 2, and 3+ active cursors |
-| `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | `--enable-sha256-verify` | Validate SHA256 on cached reads. Disable for higher throughput |
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | Storage backend: `local` or `s3` |
+| `local_root` | path | `~/.cache/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | Local storage root directory |
+| `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | S3 bucket name (required for `backend=s3`) |
+| `s3_region` | string | — | `HUGRS_S3_REGION` | S3 region (required for `backend=s3`) |
+| `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | S3 key prefix, e.g. `"hugrs/cache"` |
+| `s3_endpoint` | string | — | `HUGRS_S3_ENDPOINT` | S3-compatible endpoint URL (MinIO, etc.) |
+| `max_size` | integer | — | `HUGRS_MAX_SIZE` | Max disk usage in bytes. Triggers LRU eviction when exceeded |
+| `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | Chunk compression: `zstd` or `none` |
+| `prefetch_depth` | integer | `0` (auto=CPU cores) | `HUGRS_PREFETCH_DEPTH` | Cache read prefetch depth. `0`=auto (max 16). Range 1–16 |
+| `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | Base chunk prefetch budget for streaming sessions. Effective budgets are `base`, `base/2`, `base/4` for 1, 2, and 3+ active cursors |
+| `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | Validate SHA256 on cached reads. Disable for higher throughput |
 
 ### `[database]` — Database
 
-| Key | Type | Default | Env Var | CLI Flag | Description |
-|-----|------|---------|---------|----------|-------------|
-| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | `--db-path` | SQLite database path |
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite database path |
 
 ### `[server]` — HTTP Server
 
-| Key | Type | Default | Env Var | CLI Flag | Description |
-|-----|------|---------|---------|----------|-------------|
-| `host` | string | `"127.0.0.1"` | `HUGRS_SERVER_HOST` | `--server-host` | Listen address |
-| `port` | integer | `3000` | `HUGRS_SERVER_PORT` | `--server-port` | Listen port |
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `host` | string | `"127.0.0.1"` | `HUGRS_SERVER_HOST` | Listen address |
+| `port` | integer | `3000` | `HUGRS_SERVER_PORT` | Listen port |
+
+### `[admin]` — Control Plane
+
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `token` | string | auto-generated | `HUGRS_ADMIN_TOKEN` | Fixed admin token for `/_hugrs` APIs |
+| `token_file` | path | `~/.cache/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | Token file written by `hugrs` and used as the default token source for `hugrsctl` |
 
 ### `[huggingface]` — HuggingFace Hub
 
-| Key | Type | Default | Env Var | CLI Flag | Description |
-|-----|------|---------|---------|----------|-------------|
-| `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | `--hf-endpoint` | HF Hub URL, e.g. `https://hf-mirror.com` |
-| `token` | string | — | `HUGRS_HF_TOKEN` | `--hf-token` | HF API token for private/gated models |
-| `proxy` | string | — | `HUGRS_HF_PROXY` | `--hf-proxy` | HTTP proxy, e.g. `http://proxy:8080` |
-| `timeout_secs` | integer | `60` | `HUGRS_HF_TIMEOUT` | `--hf-timeout` | Request timeout in seconds |
-| `connect_timeout_secs` | integer | `15` | `HUGRS_HF_CONNECT_TIMEOUT` | `--hf-connect-timeout` | Connect timeout in seconds |
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | HF Hub URL, e.g. `https://hf-mirror.com` |
+| `token` | string | — | `HUGRS_HF_TOKEN` | HF API token for private/gated models |
+| `proxy` | string | — | `HUGRS_HF_PROXY` | HTTP proxy, e.g. `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_HF_TIMEOUT` | Request timeout in seconds |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_HF_CONNECT_TIMEOUT` | Connect timeout in seconds |
 
 ### `[modelscope]` — ModelScope Hub
 
-| Key | Type | Default | Env Var | CLI Flag | Description |
-|-----|------|---------|---------|----------|-------------|
-| `endpoint` | string | `"https://modelscope.cn"` | `HUGRS_MS_ENDPOINT` | `--ms-endpoint` | ModelScope Hub URL |
-| `token` | string | — | `HUGRS_MS_TOKEN` | `--ms-token` | ModelScope API token for private models |
-| `proxy` | string | — | `HUGRS_MS_PROXY` | `--ms-proxy` | HTTP proxy, e.g. `http://proxy:8080` |
-| `timeout_secs` | integer | `60` | `HUGRS_MS_TIMEOUT` | `--ms-timeout` | Request timeout in seconds |
-| `connect_timeout_secs` | integer | `15` | `HUGRS_MS_CONNECT_TIMEOUT` | `--ms-connect-timeout` | Connect timeout in seconds |
+| Key | Type | Default | Env Var | Description |
+|-----|------|---------|---------|-------------|
+| `endpoint` | string | `"https://modelscope.cn"` | `HUGRS_MS_ENDPOINT` | ModelScope Hub URL |
+| `token` | string | — | `HUGRS_MS_TOKEN` | ModelScope API token for private models |
+| `proxy` | string | — | `HUGRS_MS_PROXY` | HTTP proxy, e.g. `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_MS_TIMEOUT` | Request timeout in seconds |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_MS_CONNECT_TIMEOUT` | Connect timeout in seconds |
 
 ---
 
@@ -99,7 +106,7 @@ hugrs --max-size 10737418240 serve
 # hugrs.toml
 [storage]
 backend = "local"
-local_root = "~/.cache/hugrs/trunks"
+local_root = "~/.cache/hugrs/chunks"
 
 [database]
 path = "~/.cache/hugrs/hugrs.db"
@@ -188,48 +195,24 @@ HUGRS_MS_PROXY=http://proxy:3128
 
 ---
 
-## CLI Global Flags
+## Management Client
 
-All subcommands accept these global flags:
+`hugrs` is now a zero-argument daemon. Management is done through `hugrsctl`.
 
-```
-hugrs [GLOBAL FLAGS] <SUBCOMMAND>
+Connection rules:
 
-Global Flags:
-  -c, --config <FILE>          Config file path (default: hugrs.toml)
-      --db-path <PATH>         Database path
-      --storage-backend <BE>   Storage backend: local | s3
-      --local-root <DIR>       Local storage directory
-      --s3-bucket <NAME>       S3 bucket
-      --s3-region <REGION>     S3 region
-      --s3-prefix <PREFIX>     S3 key prefix
-      --s3-endpoint <URL>      S3 endpoint URL
-      --compression <MODE>     Trunk compression: zstd | none
-      --max-size <BYTES>       Max disk usage
-      --prefetch-depth <N>     Cache read prefetch depth (0=auto)
-      --prefetch-budget-base <N>  Base chunk prefetch budget for streaming sessions
-      --enable-sha256-verify <BOOL>  Enable SHA256 validation on cached reads
-      --server-host <HOST>     Listen address
-      --server-port <PORT>     Listen port
-      --hf-endpoint <URL>      HF Hub URL
-      --hf-token <TOKEN>       HF API token
-      --hf-proxy <URL>         HTTP proxy
-      --hf-timeout <SECS>      HF request timeout
-      --hf-connect-timeout <SECS>  HF connect timeout
-      --ms-endpoint <URL>      ModelScope Hub URL
-      --ms-token <TOKEN>       ModelScope API token
-      --ms-proxy <URL>         ModelScope HTTP proxy
-      --ms-timeout <SECS>      ModelScope request timeout
-      --ms-connect-timeout <SECS>  ModelScope connect timeout
+- endpoint: default `http://127.0.0.1:3000`, override with `--endpoint` or `HUGRS_CONTROL_ENDPOINT`
+- admin token: `--admin-token`, then `HUGRS_ADMIN_TOKEN`, then `~/.cache/hugrs/admin.token`
 
-Subcommands:
-  upload     Upload a file
-  pull       Pull a model from HuggingFace
-  list       List cached files
-  info       Show file details
-  stats      Show cache statistics
-  gc         Garbage-collect orphaned trunks
-  serve      Start HTTP server
+Examples:
+
+```bash
+hugrsctl service
+HUGRS_CONTROL_ENDPOINT=http://10.0.0.5:3000 hugrsctl service
+hugrsctl service gc --dry-run
+hugrsctl repo
+hugrsctl repo delete Qwen/Qwen3-8B
+hugrsctl file show --repo Qwen/Qwen3-8B --file config.json
 ```
 
 ## `.env` File Example
@@ -237,7 +220,7 @@ Subcommands:
 ```bash
 # .env
 HUGRS_STORAGE_BACKEND=local
-HUGRS_LOCAL_ROOT=/data/hugrs/trunks
+HUGRS_LOCAL_ROOT=/data/hugrs/chunks
 HUGRS_DB_PATH=/data/hugrs/hugrs.db
 HUGRS_COMPRESSION=none
 HUGRS_PREFETCH_DEPTH=8

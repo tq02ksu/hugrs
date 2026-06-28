@@ -23,7 +23,7 @@ fn test_init_schema() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 }
 
 #[test]
@@ -56,12 +56,14 @@ fn test_add_chunk_and_link() {
     let chunk = store.get_chunk("abc123").unwrap().unwrap();
     assert_eq!(chunk.size, 100);
     assert_eq!(chunk.ref_count, 0);
+    assert!(chunk.orphaned_at.is_some());
 
     let file = store.add_file("test.bin", "repo-x", 100, "upload").unwrap();
     store.link_file_chunk(file.id, "abc123", 0, 100).unwrap();
 
     let chunk = store.get_chunk("abc123").unwrap().unwrap();
     assert_eq!(chunk.ref_count, 1);
+    assert_eq!(chunk.orphaned_at, None);
 }
 
 #[test]
@@ -80,7 +82,8 @@ fn test_unlink_and_gc() {
 
     let orphans = store.get_orphan_chunks().unwrap();
     assert_eq!(orphans.len(), 1);
-    assert_eq!(orphans[0], "def456");
+    assert_eq!(orphans[0].sha256, "def456");
+    assert!(orphans[0].orphaned_at.is_some());
 }
 
 #[test]
@@ -120,6 +123,26 @@ fn test_stats() {
     assert_eq!(stats.stored_bytes, 500);
     assert_eq!(stats.bytes_saved, 0);
     assert_eq!(stats.saved_percent, 0.0);
+}
+
+#[test]
+fn test_orphan_stats_count_chunks_and_bytes() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    store
+        .ensure_chunk("orphan-1", "local", "or/ph/orphan-1", 100, 80)
+        .unwrap();
+    store
+        .ensure_chunk("orphan-2", "local", "or/ph/orphan-2", 200, 150)
+        .unwrap();
+    store.mark_chunk_orphaned("orphan-1").unwrap();
+    store.mark_chunk_orphaned("orphan-2").unwrap();
+
+    let (count, bytes) = store.list_orphan_chunks_stats().unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(bytes, 230);
 }
 
 #[test]

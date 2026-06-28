@@ -1,9 +1,7 @@
-use hugrs::cli::Command;
+use hugrs::config::{self, Config};
 use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
-use hugrs::{cli, config, hf, server, storage};
-
-use clap::Parser;
+use hugrs::{hf, server, storage};
 use std::sync::Arc;
 
 fn main() -> anyhow::Result<()> {
@@ -14,10 +12,7 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cli = cli::Cli::parse();
-    let overrides = cli.overrides();
-    let config = config::Config::load(overrides)?;
-
+    let config = Config::load(config::CliOverrides::default())?;
     let metadata = Arc::new(MetadataStore::new(&config.database.path)?);
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -91,85 +86,7 @@ fn main() -> anyhow::Result<()> {
             stream_client,
         );
 
-        match cli.command {
-            Command::Pull { repo, file } => {
-                hf::pull_model(&config, &service, &repo, file.as_deref()).await?;
-            }
-
-            Command::List => {
-                let files = service.list().await?;
-                if files.is_empty() {
-                    tracing::info!("No cached files");
-                } else {
-                    for f in &files {
-                        println!(
-                            "{}  {}  {}  {}  {}  {}",
-                            f.name, f.repo, f.total_size, f.source, f.created_at, f.last_accessed
-                        );
-                    }
-                }
-            }
-
-            Command::Info { name } => match service.info(&name, "hf").await? {
-                Some(f) => {
-                    println!("Name:          {}", f.name);
-                    println!("Repo:          {}", f.repo);
-                    println!("Size:          {} bytes", f.total_size);
-                    println!("Source:        {}", f.source);
-                    println!("Created:       {}", f.created_at);
-                    println!("Last accessed: {}", f.last_accessed);
-                }
-                None => {
-                    tracing::info!("File not found: {}", name);
-                }
-            },
-
-            Command::Stats => {
-                let stats = service.stats().await?;
-                println!("Repos:             {}", stats.repo_count);
-                println!("Files:             {}", stats.file_count);
-                println!("Chunks:            {}", stats.chunk_count);
-                println!("Original bytes:    {} bytes", stats.original_bytes);
-                println!("Stored bytes:      {} bytes", stats.stored_bytes);
-                println!("Bytes saved:       {} bytes", stats.bytes_saved);
-                println!("Saved percent:     {:.2}%", stats.saved_percent);
-                println!("Fetched (upstream): {}", format_bytes(stats.fetched_bytes));
-                println!("Served (client):    {}", format_bytes(stats.served_bytes));
-                if let Some(limit) = config.storage.max_size {
-                    let pct = (stats.original_bytes as u64 * 100)
-                        .checked_div(limit)
-                        .unwrap_or(0);
-                    println!("Max size:          {} bytes ({}% used)", limit, pct);
-                }
-            }
-
-            Command::Gc => {
-                let count = service.gc().await?;
-                tracing::info!("Garbage collected {} chunks", count);
-                if let Some(limit) = config.storage.max_size {
-                    let stats = service.stats().await?;
-                    if stats.original_bytes as u64 > limit {
-                        tracing::info!("Cache still exceeds max size, manual eviction needed");
-                    }
-                }
-            }
-
-            Command::Serve => {
-                server::run(config, service, ms_http_client, ms_head_client).await?;
-            }
-        }
-
+        server::run(config, service, ms_http_client, ms_head_client).await?;
         anyhow::Ok(())
     })
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut size = bytes as f64;
-    let mut unit_idx = 0;
-    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_idx += 1;
-    }
-    format!("{} ({:.2} {})", bytes, size, UNITS[unit_idx])
 }

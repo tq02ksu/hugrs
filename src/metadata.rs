@@ -27,6 +27,7 @@ pub struct Chunk {
     pub size: i64,
     pub compressed_size: Option<i64>,
     pub ref_count: i64,
+    pub orphaned_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +83,7 @@ impl MetadataStore {
             M::up(include_str!("migrations/003_drop_http_cache.sql")),
             M::up(include_str!("migrations/004_add_indexes.sql")),
             M::up(include_str!("migrations/005_cleanup_headerless_files.sql")),
+            M::up(include_str!("migrations/006_add_chunk_orphaned_at.sql")),
         ]);
 
         let result = migrations.to_latest(&mut conn);
@@ -202,6 +204,10 @@ impl MetadataStore {
                 "UPDATE chunks SET ref_count = ref_count - 1 WHERE sha256 = ?1",
                 params![sha256],
             )?;
+            conn.execute(
+                "UPDATE chunks SET orphaned_at = datetime('now') WHERE sha256 = ?1 AND ref_count = 0",
+                params![sha256],
+            )?;
         }
         conn.execute(
             "DELETE FROM file_chunks WHERE file_id = ?1",
@@ -252,7 +258,7 @@ impl MetadataStore {
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO chunks (sha256, backend, path, size, compressed_size) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO chunks (sha256, backend, path, size, compressed_size, orphaned_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
             params![sha256, backend, path, size, compressed_size],
         )?;
         Ok(())
@@ -261,7 +267,7 @@ impl MetadataStore {
     pub fn get_chunk(&self, sha256: &str) -> anyhow::Result<Option<Chunk>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT sha256, backend, path, size, compressed_size, ref_count FROM chunks WHERE sha256 = ?1",
+            "SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at FROM chunks WHERE sha256 = ?1",
         )?;
         let mut rows = stmt.query_map(params![sha256], |row| {
             Ok(Chunk {
@@ -271,6 +277,7 @@ impl MetadataStore {
                 size: row.get(3)?,
                 compressed_size: row.get(4)?,
                 ref_count: row.get(5)?,
+                orphaned_at: row.get(6)?,
             })
         })?;
         Ok(rows.next().transpose()?)
@@ -284,12 +291,32 @@ impl MetadataStore {
         chunk_size: i64,
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let inserted = conn.execute(
             "INSERT OR IGNORE INTO file_chunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
             params![file_id, sha256, chunk_index, chunk_size],
         )?;
+        if inserted > 0 {
+            conn.execute(
+                "UPDATE chunks SET ref_count = ref_count + 1, orphaned_at = NULL WHERE sha256 = ?1",
+                params![sha256],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn mark_chunk_orphaned(&self, sha256: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE chunks SET ref_count = ref_count + 1 WHERE sha256 = ?1",
+            "UPDATE chunks SET orphaned_at = datetime('now') WHERE sha256 = ?1",
+            params![sha256],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_chunk_orphaned(&self, sha256: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE chunks SET orphaned_at = NULL WHERE sha256 = ?1",
             params![sha256],
         )?;
         Ok(())
@@ -361,15 +388,78 @@ impl MetadataStore {
         Ok(result)
     }
 
-    pub fn get_orphan_chunks(&self) -> anyhow::Result<Vec<String>> {
+    pub fn get_orphan_chunks(&self) -> anyhow::Result<Vec<Chunk>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT sha256 FROM chunks WHERE ref_count = 0")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut stmt = conn.prepare(
+            "SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at
+             FROM chunks
+             WHERE ref_count = 0 AND orphaned_at IS NOT NULL
+             ORDER BY orphaned_at ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Chunk {
+                sha256: row.get(0)?,
+                backend: row.get(1)?,
+                path: row.get(2)?,
+                size: row.get(3)?,
+                compressed_size: row.get(4)?,
+                ref_count: row.get(5)?,
+                orphaned_at: row.get(6)?,
+            })
+        })?;
         let mut result = Vec::new();
         for row in rows {
             result.push(row?);
         }
         Ok(result)
+    }
+
+    pub fn list_orphan_chunks_batch(&self, limit: usize) -> anyhow::Result<Vec<Chunk>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at
+             FROM chunks
+             WHERE ref_count = 0 AND orphaned_at IS NOT NULL
+             ORDER BY orphaned_at ASC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(Chunk {
+                sha256: row.get(0)?,
+                backend: row.get(1)?,
+                path: row.get(2)?,
+                size: row.get(3)?,
+                compressed_size: row.get(4)?,
+                ref_count: row.get(5)?,
+                orphaned_at: row.get(6)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    pub fn list_orphan_chunks_stats(&self) -> anyhow::Result<(i64, i64)> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE ref_count = 0 AND orphaned_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        let bytes = conn.query_row(
+            "SELECT COALESCE(SUM(COALESCE(compressed_size, size)), 0) FROM chunks WHERE ref_count = 0 AND orphaned_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok((count, bytes))
+    }
+
+    pub fn delete_chunk(&self, sha256: &str) -> anyhow::Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute("DELETE FROM chunks WHERE sha256 = ?1", params![sha256])?;
+        Ok(deleted > 0)
     }
 
     pub fn get_stats(&self) -> anyhow::Result<Stats> {

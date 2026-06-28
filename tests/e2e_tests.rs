@@ -242,7 +242,6 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
 }
 
 fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
-    use axum::routing::get;
     use tokio::sync::Mutex as TokioMutex;
 
     let service = make_service(dir, "http_db");
@@ -251,6 +250,10 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
         server: hugrs::config::ServerConfig {
             host: "127.0.0.1".into(),
             port: 3000,
+        },
+        admin: hugrs::config::AdminConfig {
+            token: Some("test-admin-token".into()),
+            token_file: dir.path().join("admin.token"),
         },
         storage: hugrs::config::StorageConfig {
             backend: "local".into(),
@@ -290,6 +293,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
     let state = hugrs::server::AppState {
         service: Arc::new(TokioMutex::new(service)),
         config: Arc::new(config),
+        admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),
         head_client,
         ms_http_client: http_client,
@@ -301,20 +305,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
         ),
     };
 
-    Router::new()
-        .route(
-            "/api/models/{org}/{repo}/{*suffix}",
-            get(hugrs::server::hf_model_api_suffix),
-        )
-        .route(
-            "/{org}/{repo}/resolve/{revision}/{*path}",
-            get(hugrs::server::hf_file_proxy).head(hugrs::server::hf_file_proxy),
-        )
-        .route(
-            "/ms/api/v1/models/{org}/{repo}/repo",
-            get(hugrs::server::ms_repo_file_proxy).head(hugrs::server::ms_repo_file_proxy),
-        )
-        .with_state(state)
+    hugrs::server::app_router(state)
 }
 
 // ---------- tests ----------
@@ -870,4 +861,81 @@ async fn test_redirect_small_file_get_populates_db_headers() {
         file.content_type.as_deref(),
         Some("application/json; charset=utf-8")
     );
+}
+
+#[tokio::test]
+async fn test_control_api_rejects_missing_token() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/_hugrs/service")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_control_api_returns_service_status() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/_hugrs/service")
+        .header("Authorization", "Bearer test-admin-token")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_control_api_file_delete_without_source_applies_to_all_sources() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+
+    let seed_service = make_service(&dir, "http_db");
+    seed_service
+        .upload("shared.bin", "repo-a", "hf", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+    seed_service
+        .upload("shared.bin", "repo-a", "ms", vec![1, 2, 3, 4])
+        .await
+        .unwrap();
+
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let req = axum::http::Request::builder()
+        .method("DELETE")
+        .uri("/_hugrs/files?repo=repo-a&file=shared.bin")
+        .header("Authorization", "Bearer test-admin-token")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let store = MetadataStore::new(&dir.path().join("http_db")).unwrap();
+    assert!(store
+        .get_file_by_name("shared.bin", "hf")
+        .unwrap()
+        .is_none());
+    assert!(store
+        .get_file_by_name("shared.bin", "ms")
+        .unwrap()
+        .is_none());
 }

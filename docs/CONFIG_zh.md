@@ -5,8 +5,8 @@
 配置按以下顺序加载，**后者覆盖前者**：
 
 ```
-默认值  →  hugrs.toml  →  .env  →  环境变量  →  CLI 参数
-（最低）                                                      （最高）
+默认值  →  hugrs.toml  →  .env  →  环境变量
+（最低）                                          （最高）
 ```
 
 ## 配置方式一览
@@ -14,10 +14,10 @@
 | 方式 | 格式 | 说明 |
 |------|------|------|
 | 默认值 | — | 开箱即用，无需任何配置 |
-| `hugrs.toml` | TOML | 先找 `./hugrs.toml`，没有则找 `~/.config/hugrs/hugrs.toml`，可通过 `-c` 强制指定 |
+| `hugrs.toml` | TOML | 先找 `./hugrs.toml`，没有则找 `~/.config/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | 当前目录下的环境文件 |
 | 环境变量 | `HUGRS_*` | 系统环境变量 |
-| CLI 参数 | `--xxx` | 命令行全局参数，作用于所有子命令 |
+| `hugrsctl` 参数 | `--xxx` | 仅作用于管理客户端，不配置守护进程 |
 
 ### 示例：max_size 的四种配置方式
 
@@ -32,8 +32,8 @@ HUGRS_MAX_SIZE=10737418240
 # 3. 环境变量
 export HUGRS_MAX_SIZE=10737418240
 
-# 4. CLI 参数
-hugrs --max-size 10737418240 serve
+# 4. `hugrs` 不支持 CLI 参数
+# 请改用环境变量或 hugrs.toml 配置守护进程
 ```
 
 ---
@@ -42,52 +42,59 @@ hugrs --max-size 10737418240 serve
 
 ### `[storage]` — 存储配置
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | `--storage-backend` | 存储后端：`local` 或 `s3` |
-| `local_root` | path | `~/.cache/hugrs/trunks` | `HUGRS_LOCAL_ROOT` | `--local-root` | 本地存储根目录 |
-| `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | `--s3-bucket` | S3 bucket 名称（backend=s3 时必填） |
-| `s3_region` | string | — | `HUGRS_S3_REGION` | `--s3-region` | S3 区域（backend=s3 时必填） |
-| `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | `--s3-prefix` | S3 key 前缀，如 `"hugrs/cache"` |
-| `s3_endpoint` | string | — | `HUGRS_S3_ENDPOINT` | `--s3-endpoint` | S3 兼容端点 URL（MinIO 等） |
-| `max_size` | integer | — | `HUGRS_MAX_SIZE` | `--max-size` | 最大磁盘占用（字节），超出触发 LRU 淘汰 |
-| `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | `--compression` | trunk 压缩方式：`zstd` 或 `none` |
-| `prefetch_depth` | integer | `0`（自动=CPU核数） | `HUGRS_PREFETCH_DEPTH` | `--prefetch-depth` | 缓存读取预读深度，`0`=自动（最多16），范围 1~16 |
-| `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | `--prefetch-budget-base` | 流式下载 session 的 chunk 预取预算基数。1 个活跃游标时用 `base`，2 个时用 `base/2`，3 个及以上时用 `base/4` |
-| `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | `--enable-sha256-verify` | 缓存读取时是否校验 SHA256，关闭可提升缓存读取速度 |
+| 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
+|--------|------|--------|----------|------|
+| `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | 存储后端：`local` 或 `s3` |
+| `local_root` | path | `~/.cache/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | 本地存储根目录 |
+| `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | S3 bucket 名称（backend=s3 时必填） |
+| `s3_region` | string | — | `HUGRS_S3_REGION` | S3 区域（backend=s3 时必填） |
+| `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | S3 key 前缀，如 `"hugrs/cache"` |
+| `s3_endpoint` | string | — | `HUGRS_S3_ENDPOINT` | S3 兼容端点 URL（MinIO 等） |
+| `max_size` | integer | — | `HUGRS_MAX_SIZE` | 最大磁盘占用（字节），超出触发 LRU 淘汰 |
+| `compression` | string | `"zstd"` | `HUGRS_COMPRESSION` | chunk 压缩方式：`zstd` 或 `none` |
+| `prefetch_depth` | integer | `0`（自动=CPU核数） | `HUGRS_PREFETCH_DEPTH` | 缓存读取预读深度，`0`=自动（最多16），范围 1–16 |
+| `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | 流式下载 session 的 chunk 预取预算基数。1 个活跃游标时用 `base`，2 个时用 `base/2`，3 个及以上时用 `base/4` |
+| `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | 缓存读取时是否校验 SHA256，关闭可提升缓存读取速度 |
 
 ### `[database]` — 数据库配置
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | `--db-path` | SQLite 数据库文件路径 |
+| 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
+|--------|------|--------|----------|------|
+| `path` | path | `~/.cache/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite 数据库文件路径 |
 
 ### `[server]` — HTTP 服务配置
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `host` | string | `"127.0.0.1"` | `HUGRS_SERVER_HOST` | `--server-host` | 监听地址 |
-| `port` | integer | `3000` | `HUGRS_SERVER_PORT` | `--server-port` | 监听端口 |
+| 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
+|--------|------|--------|----------|------|
+| `host` | string | `"127.0.0.1"` | `HUGRS_SERVER_HOST` | 监听地址 |
+| `port` | integer | `3000` | `HUGRS_SERVER_PORT` | 监听端口 |
+
+### `[admin]` — 控制面配置
+
+| 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
+|--------|------|--------|----------|------|
+| `token` | string | 自动生成 | `HUGRS_ADMIN_TOKEN` | `/_hugrs` 管理 API 的固定 admin token |
+| `token_file` | path | `~/.cache/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | `hugrs` 写入的 token 文件，也是 `hugrsctl` 默认读取的 token 来源 |
 
 ### `[huggingface]` — HuggingFace Hub 配置
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | `--hf-endpoint` | HF Hub 地址，可设为 `https://hf-mirror.com` |
-| `token` | string | — | `HUGRS_HF_TOKEN` | `--hf-token` | HF API Token（访问私有/受限模型） |
-| `proxy` | string | — | `HUGRS_HF_PROXY` | `--hf-proxy` | HTTP 代理地址，如 `http://proxy:8080` |
-| `timeout_secs` | integer | `60` | `HUGRS_HF_TIMEOUT` | `--hf-timeout` | 请求超时（秒） |
-| `connect_timeout_secs` | integer | `15` | `HUGRS_HF_CONNECT_TIMEOUT` | `--hf-connect-timeout` | 连接超时（秒） |
+| 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
+|--------|------|--------|----------|------|
+| `endpoint` | string | `"https://huggingface.co"` | `HUGRS_HF_ENDPOINT` | HF Hub 地址，可设为 `https://hf-mirror.com` |
+| `token` | string | — | `HUGRS_HF_TOKEN` | HF API Token（访问私有/受限模型） |
+| `proxy` | string | — | `HUGRS_HF_PROXY` | HTTP 代理地址，如 `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_HF_TIMEOUT` | 请求超时（秒） |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_HF_CONNECT_TIMEOUT` | 连接超时（秒） |
 
 ### `[modelscope]` — ModelScope Hub 配置
 
-| 配置项 | 类型 | 默认值 | 环境变量 | CLI 参数 | 说明 |
-|--------|------|--------|----------|----------|------|
-| `endpoint` | string | `"https://modelscope.cn"` | `HUGRS_MS_ENDPOINT` | `--ms-endpoint` | ModelScope Hub 地址 |
-| `token` | string | — | `HUGRS_MS_TOKEN` | `--ms-token` | ModelScope API Token（访问私有模型） |
-| `proxy` | string | — | `HUGRS_MS_PROXY` | `--ms-proxy` | HTTP 代理地址，如 `http://proxy:8080` |
-| `timeout_secs` | integer | `60` | `HUGRS_MS_TIMEOUT` | `--ms-timeout` | 请求超时（秒） |
-| `connect_timeout_secs` | integer | `15` | `HUGRS_MS_CONNECT_TIMEOUT` | `--ms-connect-timeout` | 连接超时（秒） |
+| 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
+|--------|------|--------|----------|------|
+| `endpoint` | string | `"https://modelscope.cn"` | `HUGRS_MS_ENDPOINT` | ModelScope Hub 地址 |
+| `token` | string | — | `HUGRS_MS_TOKEN` | ModelScope API Token（访问私有模型） |
+| `proxy` | string | — | `HUGRS_MS_PROXY` | HTTP 代理地址，如 `http://proxy:8080` |
+| `timeout_secs` | integer | `60` | `HUGRS_MS_TIMEOUT` | 请求超时（秒） |
+| `connect_timeout_secs` | integer | `15` | `HUGRS_MS_CONNECT_TIMEOUT` | 连接超时（秒） |
 
 ---
 
@@ -99,7 +106,7 @@ hugrs --max-size 10737418240 serve
 # hugrs.toml
 [storage]
 backend = "local"
-local_root = "~/.cache/hugrs/trunks"
+local_root = "~/.cache/hugrs/chunks"
 
 [database]
 path = "~/.cache/hugrs/hugrs.db"
@@ -187,47 +194,29 @@ HUGRS_MS_PROXY=http://proxy:3128
 
 ---
 
-## CLI 全局参数速查
+## 管理客户端
 
-所有子命令均接受以下全局参数：
+`hugrs` 现在是零参数守护进程。管理操作改由 `hugrsctl` 执行。
 
-```
-hugrs [全局参数] <子命令>
+连接规则：
 
-全局参数:
-  -c, --config <FILE>          配置文件路径（默认 hugrs.toml）
-      --db-path <PATH>         数据库路径
-      --storage-backend <BE>   存储后端: local | s3
-      --local-root <DIR>       本地存储目录
-      --s3-bucket <NAME>       S3 bucket
-      --s3-region <REGION>     S3 region
-      --s3-prefix <PREFIX>     S3 key 前缀
-      --s3-endpoint <URL>      S3 端点 URL
-      --server-host <HOST>     服务监听地址
-      --server-port <PORT>     服务监听端口
-      --hf-endpoint <URL>      HF Hub 地址
-      --hf-token <TOKEN>       HF API Token
-      --hf-proxy <URL>         HTTP 代理
-      --hf-timeout <SECS>      HF 请求超时
-      --hf-connect-timeout <SECS>  HF 连接超时
-      --ms-endpoint <URL>      ModelScope Hub 地址
-      --ms-token <TOKEN>       ModelScope API Token
-      --ms-proxy <URL>         ModelScope HTTP 代理
-      --ms-timeout <SECS>      ModelScope 请求超时
-      --ms-connect-timeout <SECS>  ModelScope 连接超时
-      --max-size <BYTES>       最大磁盘占用
-      --prefetch-depth <N>     缓存预读深度（0=自动）
-      --prefetch-budget-base <N>  流式下载的 chunk 预取预算基数
-      --enable-sha256-verify <BOOL>  是否开启缓存 SHA256 校验
+- endpoint：默认 `http://127.0.0.1:3000`，可用 `--endpoint` 或 `HUGRS_CONTROL_ENDPOINT` 覆盖
+- admin token：`--admin-token`，其次 `HUGRS_ADMIN_TOKEN`，最后默认读取 `~/.cache/hugrs/admin.token`
 
-子命令:
-  upload   上传文件
-  pull     从 HuggingFace 拉取模型
-  list     列出缓存文件
-  info     查看文件详情
-  stats    查看缓存统计
-  gc       垃圾回收
-  serve    启动 HTTP 服务
+常用示例：
+
+```bash
+hugrsctl service
+HUGRS_CONTROL_ENDPOINT=http://10.0.0.5:3000 hugrsctl service
+hugrsctl service stats
+hugrsctl service gc --dry-run
+hugrsctl repo
+hugrsctl repo show Qwen/Qwen3-8B
+hugrsctl repo delete Qwen/Qwen3-8B
+hugrsctl file
+hugrsctl file show --repo Qwen/Qwen3-8B --file config.json
+hugrsctl file delete --repo Qwen/Qwen3-8B --file config.json
+hugrsctl repo --source hf
 ```
 
 ## .env 文件示例
@@ -235,7 +224,7 @@ hugrs [全局参数] <子命令>
 ```bash
 # .env
 HUGRS_STORAGE_BACKEND=local
-HUGRS_LOCAL_ROOT=/data/hugrs/trunks
+HUGRS_LOCAL_ROOT=/data/hugrs/chunks
 HUGRS_DB_PATH=/data/hugrs/hugrs.db
 HUGRS_MAX_SIZE=107374182400
 HUGRS_PREFETCH_DEPTH=8

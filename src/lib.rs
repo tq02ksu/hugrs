@@ -1,8 +1,10 @@
+pub mod admin_client;
 pub mod chunker;
-pub mod cli;
 pub mod config;
+pub mod control;
 pub mod git;
 pub mod hf;
+pub mod hugrsctl_cli;
 pub mod metadata;
 pub mod server;
 pub mod service;

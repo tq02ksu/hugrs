@@ -1,5 +1,6 @@
 use crate::storage::Compression;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -12,6 +13,9 @@ pub struct Config {
 
     #[serde(default)]
     pub server: ServerConfig,
+
+    #[serde(default)]
+    pub admin: AdminConfig,
 
     #[serde(default)]
     pub huggingface: HfConfig,
@@ -76,6 +80,14 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminConfig {
+    pub token: Option<String>,
+
+    #[serde(default = "default_admin_token_file")]
+    pub token_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfConfig {
     #[serde(default = "default_hf_endpoint")]
     pub endpoint: String,
@@ -128,6 +140,9 @@ fn default_local_root() -> PathBuf {
 }
 fn default_db_path() -> PathBuf {
     default_cache_base().join("hugrs").join("hugrs.db")
+}
+fn default_admin_token_file() -> PathBuf {
+    default_cache_base().join("hugrs").join("admin.token")
 }
 fn default_host() -> String {
     "127.0.0.1".into()
@@ -183,6 +198,15 @@ impl Default for ServerConfig {
     }
 }
 
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            token: None,
+            token_file: default_admin_token_file(),
+        }
+    }
+}
+
 impl Default for HfConfig {
     fn default() -> Self {
         Self {
@@ -207,6 +231,7 @@ impl Default for MsConfig {
     }
 }
 
+#[derive(Default)]
 pub struct CliOverrides {
     pub db_path: Option<String>,
     pub storage_backend: Option<String>,
@@ -227,6 +252,8 @@ pub struct CliOverrides {
     pub ms_proxy: Option<String>,
     pub ms_timeout: Option<u64>,
     pub ms_connect_timeout: Option<u64>,
+    pub admin_token: Option<String>,
+    pub admin_token_file: Option<String>,
     pub config_file: Option<String>,
     pub compression: Option<String>,
     pub max_size: Option<u64>,
@@ -304,6 +331,12 @@ impl Config {
         if let Ok(val) = std::env::var("HUGRS_SERVER_PORT") {
             config.server.port = val.parse()?;
         }
+        if let Ok(val) = std::env::var("HUGRS_ADMIN_TOKEN") {
+            config.admin.token = Some(val);
+        }
+        if let Ok(val) = std::env::var("HUGRS_ADMIN_TOKEN_FILE") {
+            config.admin.token_file = val.into();
+        }
         if let Ok(val) = std::env::var("HUGRS_HF_ENDPOINT") {
             config.huggingface.endpoint = val;
         }
@@ -377,6 +410,12 @@ impl Config {
         if let Some(v) = overrides.server_port {
             config.server.port = v;
         }
+        if let Some(v) = overrides.admin_token {
+            config.admin.token = Some(v);
+        }
+        if let Some(v) = overrides.admin_token_file {
+            config.admin.token_file = v.into();
+        }
         if let Some(v) = overrides.hf_endpoint {
             config.huggingface.endpoint = v;
         }
@@ -426,5 +465,35 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    pub fn ensure_admin_token(&mut self) -> anyhow::Result<String> {
+        if let Some(token) = &self.admin.token {
+            return Ok(token.clone());
+        }
+
+        if let Ok(token) = std::fs::read_to_string(&self.admin.token_file) {
+            let token = token.trim().to_string();
+            if !token.is_empty() {
+                self.admin.token = Some(token.clone());
+                return Ok(token);
+            }
+        }
+
+        if let Some(parent) = self.admin.token_file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let token = format!(
+            "hugrs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        );
+        let mut file = std::fs::File::create(&self.admin.token_file)?;
+        file.write_all(token.as_bytes())?;
+        self.admin.token = Some(token.clone());
+        Ok(token)
     }
 }
