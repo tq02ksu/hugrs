@@ -4,7 +4,7 @@
 
 HugRS is a transparent caching proxy for HuggingFace and ModelScope model files. Files are split into 4MB chunks, each keyed by SHA256. The project now provides:
 
-- `hugrs`: zero-argument daemon
+- `hugrs`: daemon process with config file, environment variable, and CLI override support
 - `hugrsctl`: management client for service, repo, and file operations
 - control-plane admin API under `/_hugrs/...`
 
@@ -75,6 +75,11 @@ cargo build --release
   - `docs/CONFIG.md` ↔ `docs/CONFIG_zh.md`
   - `docs/CLI.md` ↔ `docs/CLI_zh.md`
   When modifying either file in a pair, sync the same change to its counterpart.
+- **Config responsibility split**:
+  - `clap` parses daemon and management CLI arguments.
+  - `dotenvy` loads `.env` into the process environment.
+  - `figment` merges defaults, config file values, environment variables, and CLI overrides into `Config`.
+  Keep this separation explicit in code and docs. Do not describe `clap` or `dotenvy` as config merge solutions.
 
 ## Release Checklist
 

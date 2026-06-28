@@ -5,14 +5,24 @@
 Config is loaded in this order, **later overrides earlier**:
 
 ```
-defaults  →  hugrs.toml  →  .env  →  env vars
-(lowest)                                   (highest)
+defaults  →  hugrs.toml  →  .env  →  env vars  →  hugrs flags
+(lowest)                                                    (highest)
 ```
 
 Default cache directory:
 
 - macOS: `~/Library/Caches`
 - Linux: `~/.cache`
+
+## Source Responsibilities
+
+These components are complementary, not alternatives:
+
+- `clap` parses command-line arguments.
+- `dotenvy` loads `.env` values into the process environment.
+- `figment` merges defaults, config file values, environment variables, and CLI overrides.
+
+The actual design choice is whether merge precedence is implemented manually or delegated to `figment`. HugRS uses `figment` as the merge engine.
 
 ## Configuration Methods
 
@@ -22,8 +32,9 @@ Default cache directory:
 | `hugrs.toml` | TOML | Tries `./hugrs.toml`, then `~/.config/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | Environment file in the current directory |
 | Env vars | `HUGRS_*` | System environment variables |
+| `hugrs` flags | `--xxx` | Daemon startup overrides such as `--config` or `--server-port` |
 
-### Example: 3 ways to set `max_size`
+### Example: 4 ways to set `max_size`
 
 ```bash
 # 1. hugrs.toml
@@ -35,6 +46,9 @@ HUGRS_MAX_SIZE=10737418240
 
 # 3. Env var
 export HUGRS_MAX_SIZE=10737418240
+
+# 4. hugrs flag
+hugrs --max-size 10737418240
 ```
 
 ---
@@ -217,4 +231,16 @@ HUGRS_HF_CONNECT_TIMEOUT=15
 HUGRS_MS_ENDPOINT=https://modelscope.cn
 HUGRS_MS_TIMEOUT=60
 HUGRS_MS_CONNECT_TIMEOUT=15
+```
+
+## Common `hugrs` Flags
+
+These flags apply to the daemon process, not to `hugrsctl`.
+
+```bash
+hugrs --config ./hugrs.toml
+hugrs --server-host 0.0.0.0 --server-port 3001
+hugrs --db-path /data/hugrs.db
+hugrs --local-root /data/chunks
+hugrs --hf-endpoint https://hf-mirror.com
 ```

@@ -157,6 +157,8 @@ Start the daemon from source:
 
 ```bash
 cargo run
+cargo run -- --server-port 3001
+cargo run -- --config ./hugrs.toml
 HUGRS_HF_ENDPOINT=https://hf-mirror.com cargo run
 HUGRS_MS_ENDPOINT=https://modelscope.cn cargo run
 ```
@@ -176,6 +178,8 @@ After installation, run the daemon and management client directly:
 
 ```bash
 hugrs
+hugrs --server-port 3001
+hugrs --config ./hugrs.toml
 hugrsctl service
 hugrsctl repo
 hugrsctl file

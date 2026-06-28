@@ -1,4 +1,6 @@
-use hugrs::config::{self, Config};
+use clap::Parser;
+use hugrs::config::Config;
+use hugrs::daemon_cli::DaemonCli;
 use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
 use hugrs::{hf, server, storage};
@@ -12,7 +14,8 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = Config::load(config::CliOverrides::default())?;
+    let cli = DaemonCli::parse();
+    let config = Config::load(cli.overrides())?;
     let metadata = Arc::new(MetadataStore::new(&config.database.path)?);
     let rt = tokio::runtime::Runtime::new()?;
 

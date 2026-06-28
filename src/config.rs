@@ -1,4 +1,8 @@
 use crate::storage::Compression;
+use figment::{
+    providers::{Format, Serialized, Toml},
+    Figment,
+};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
@@ -53,7 +57,7 @@ pub struct StorageConfig {
 }
 
 fn default_prefetch_depth() -> usize {
-    0 // 0 means auto-detect (num CPUs, max 16)
+    0
 }
 
 fn default_prefetch_budget_base() -> usize {
@@ -122,6 +126,7 @@ pub struct MsConfig {
 fn default_backend() -> String {
     "local".into()
 }
+
 fn default_cache_base() -> PathBuf {
     let cache = dirs::cache_dir().unwrap_or_else(|| {
         dirs::home_dir()
@@ -138,27 +143,35 @@ fn default_cache_base() -> PathBuf {
 fn default_local_root() -> PathBuf {
     default_cache_base().join("hugrs").join("chunks")
 }
+
 fn default_db_path() -> PathBuf {
     default_cache_base().join("hugrs").join("hugrs.db")
 }
+
 fn default_admin_token_file() -> PathBuf {
     default_cache_base().join("hugrs").join("admin.token")
 }
+
 fn default_host() -> String {
     "127.0.0.1".into()
 }
+
 fn default_port() -> u16 {
     3000
 }
+
 fn default_hf_endpoint() -> String {
     "https://huggingface.co".into()
 }
+
 fn default_ms_endpoint() -> String {
     "https://modelscope.cn".into()
 }
+
 fn default_timeout_secs() -> u64 {
     60
 }
+
 fn default_connect_timeout_secs() -> u64 {
     15
 }
@@ -262,190 +275,114 @@ pub struct CliOverrides {
     pub enable_sha256_verify: Option<bool>,
 }
 
+#[derive(Debug, Default, Serialize)]
+struct ConfigPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage: Option<StoragePatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<DatabasePatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server: Option<ServerPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admin: Option<AdminPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    huggingface: Option<HfPatch>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    modelscope: Option<MsPatch>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct StoragePatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    local_root: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s3_bucket: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s3_region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s3_prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    s3_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compression: Option<Compression>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prefetch_depth: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prefetch_budget_base: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verify_sha256: Option<bool>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct DatabasePatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct ServerPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct AdminPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_file: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct HfPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proxy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connect_timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct MsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proxy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connect_timeout_secs: Option<u64>,
+}
+
 impl Config {
     pub fn load(overrides: CliOverrides) -> anyhow::Result<Self> {
-        let mut config = Config::default();
+        dotenvy::dotenv().ok();
 
-        let config_paths: Vec<String> = if let Some(ref path) = overrides.config_file {
-            vec![path.clone()]
-        } else {
-            let home_config = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".config")
-                .join("hugrs")
-                .join("hugrs.toml");
-            vec![
-                "hugrs.toml".to_string(),
-                home_config.to_string_lossy().to_string(),
-            ]
-        };
-
-        for path in &config_paths {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                config = toml::from_str(&content)?;
+        let mut figment = Figment::from(Serialized::defaults(Config::default()));
+        for path in config_paths(&overrides) {
+            if std::fs::metadata(&path).is_ok() {
+                figment = figment.merge(Toml::file(path));
                 break;
             }
         }
 
-        dotenvy::dotenv().ok();
+        figment = figment.merge(Serialized::defaults(env_patch()?));
+        figment = figment.merge(Serialized::defaults(cli_patch(overrides)?));
 
-        if let Ok(val) = std::env::var("HUGRS_STORAGE_BACKEND") {
-            config.storage.backend = val;
-        }
-        if let Ok(val) = std::env::var("HUGRS_LOCAL_ROOT") {
-            config.storage.local_root = val.into();
-        }
-        if let Ok(val) = std::env::var("HUGRS_S3_BUCKET") {
-            config.storage.s3_bucket = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_S3_REGION") {
-            config.storage.s3_region = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_S3_PREFIX") {
-            config.storage.s3_prefix = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_S3_ENDPOINT") {
-            config.storage.s3_endpoint = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_COMPRESSION") {
-            config.storage.compression = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_MAX_SIZE") {
-            config.storage.max_size = Some(val.parse()?);
-        }
-        if let Ok(val) = std::env::var("HUGRS_PREFETCH_DEPTH") {
-            config.storage.prefetch_depth = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_PREFETCH_BUDGET_BASE") {
-            config.storage.prefetch_budget_base = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_VERIFY_SHA256") {
-            config.storage.verify_sha256 = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_DB_PATH") {
-            config.database.path = val.into();
-        }
-        if let Ok(val) = std::env::var("HUGRS_SERVER_HOST") {
-            config.server.host = val;
-        }
-        if let Ok(val) = std::env::var("HUGRS_SERVER_PORT") {
-            config.server.port = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_ADMIN_TOKEN") {
-            config.admin.token = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_ADMIN_TOKEN_FILE") {
-            config.admin.token_file = val.into();
-        }
-        if let Ok(val) = std::env::var("HUGRS_HF_ENDPOINT") {
-            config.huggingface.endpoint = val;
-        }
-        if let Ok(val) = std::env::var("HUGRS_HF_TOKEN") {
-            config.huggingface.token = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_HF_PROXY") {
-            config.huggingface.proxy = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_HF_TIMEOUT") {
-            config.huggingface.timeout_secs = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_HF_CONNECT_TIMEOUT") {
-            config.huggingface.connect_timeout_secs = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_MS_ENDPOINT") {
-            config.modelscope.endpoint = val;
-        }
-        if let Ok(val) = std::env::var("HUGRS_MS_TOKEN") {
-            config.modelscope.token = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_MS_PROXY") {
-            config.modelscope.proxy = Some(val);
-        }
-        if let Ok(val) = std::env::var("HUGRS_MS_TIMEOUT") {
-            config.modelscope.timeout_secs = val.parse()?;
-        }
-        if let Ok(val) = std::env::var("HUGRS_MS_CONNECT_TIMEOUT") {
-            config.modelscope.connect_timeout_secs = val.parse()?;
-        }
-
-        if let Some(v) = overrides.db_path {
-            config.database.path = v.into();
-        }
-        if let Some(v) = overrides.storage_backend {
-            config.storage.backend = v;
-        }
-        if let Some(v) = overrides.local_root {
-            config.storage.local_root = v.into();
-        }
-        if let Some(v) = overrides.s3_bucket {
-            config.storage.s3_bucket = Some(v);
-        }
-        if let Some(v) = overrides.s3_region {
-            config.storage.s3_region = Some(v);
-        }
-        if let Some(v) = overrides.s3_prefix {
-            config.storage.s3_prefix = Some(v);
-        }
-        if let Some(v) = overrides.s3_endpoint {
-            config.storage.s3_endpoint = Some(v);
-        }
-        if let Some(v) = overrides.compression {
-            config.storage.compression = v.parse()?;
-        }
-        if let Some(v) = overrides.max_size {
-            config.storage.max_size = Some(v);
-        }
-        if let Some(v) = overrides.prefetch_depth {
-            config.storage.prefetch_depth = v;
-        }
-        if let Some(v) = overrides.prefetch_budget_base {
-            config.storage.prefetch_budget_base = v;
-        }
-        if let Some(v) = overrides.enable_sha256_verify {
-            config.storage.verify_sha256 = v;
-        }
-        if let Some(v) = overrides.server_host {
-            config.server.host = v;
-        }
-        if let Some(v) = overrides.server_port {
-            config.server.port = v;
-        }
-        if let Some(v) = overrides.admin_token {
-            config.admin.token = Some(v);
-        }
-        if let Some(v) = overrides.admin_token_file {
-            config.admin.token_file = v.into();
-        }
-        if let Some(v) = overrides.hf_endpoint {
-            config.huggingface.endpoint = v;
-        }
-        if let Some(v) = overrides.hf_token {
-            config.huggingface.token = Some(v);
-        }
-        if let Some(v) = overrides.hf_proxy {
-            config.huggingface.proxy = Some(v);
-        }
-        if let Some(v) = overrides.hf_timeout {
-            config.huggingface.timeout_secs = v;
-        }
-        if let Some(v) = overrides.hf_connect_timeout {
-            config.huggingface.connect_timeout_secs = v;
-        }
-        if let Some(v) = overrides.ms_endpoint {
-            config.modelscope.endpoint = v;
-        }
-        if let Some(v) = overrides.ms_token {
-            config.modelscope.token = Some(v);
-        }
-        if let Some(v) = overrides.ms_proxy {
-            config.modelscope.proxy = Some(v);
-        }
-        if let Some(v) = overrides.ms_timeout {
-            config.modelscope.timeout_secs = v;
-        }
-        if let Some(v) = overrides.ms_connect_timeout {
-            config.modelscope.connect_timeout_secs = v;
-        }
+        let config: Config = figment.extract()?;
 
         if config.storage.backend == "local" {
             let root = &config.storage.local_root;
@@ -496,4 +433,255 @@ impl Config {
         self.admin.token = Some(token.clone());
         Ok(token)
     }
+}
+
+fn config_paths(overrides: &CliOverrides) -> Vec<String> {
+    if let Some(path) = &overrides.config_file {
+        return vec![path.clone()];
+    }
+
+    let home_config = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".config")
+        .join("hugrs")
+        .join("hugrs.toml");
+    vec![
+        "hugrs.toml".to_string(),
+        home_config.to_string_lossy().to_string(),
+    ]
+}
+
+fn cli_patch(overrides: CliOverrides) -> anyhow::Result<ConfigPatch> {
+    let mut patch = ConfigPatch::default();
+
+    if has_any(&[
+        overrides.storage_backend.is_some(),
+        overrides.local_root.is_some(),
+        overrides.s3_bucket.is_some(),
+        overrides.s3_region.is_some(),
+        overrides.s3_prefix.is_some(),
+        overrides.s3_endpoint.is_some(),
+        overrides.compression.is_some(),
+        overrides.max_size.is_some(),
+        overrides.prefetch_depth.is_some(),
+        overrides.prefetch_budget_base.is_some(),
+        overrides.enable_sha256_verify.is_some(),
+    ]) {
+        patch.storage = Some(StoragePatch {
+            backend: overrides.storage_backend,
+            local_root: overrides.local_root.map(PathBuf::from),
+            s3_bucket: overrides.s3_bucket,
+            s3_region: overrides.s3_region,
+            s3_prefix: overrides.s3_prefix,
+            s3_endpoint: overrides.s3_endpoint,
+            compression: match overrides.compression {
+                Some(value) => Some(value.parse()?),
+                None => None,
+            },
+            max_size: overrides.max_size,
+            prefetch_depth: overrides.prefetch_depth,
+            prefetch_budget_base: overrides.prefetch_budget_base,
+            verify_sha256: overrides.enable_sha256_verify,
+        });
+    }
+
+    if overrides.db_path.is_some() {
+        patch.database = Some(DatabasePatch {
+            path: overrides.db_path.map(PathBuf::from),
+        });
+    }
+
+    if has_any(&[
+        overrides.server_host.is_some(),
+        overrides.server_port.is_some(),
+    ]) {
+        patch.server = Some(ServerPatch {
+            host: overrides.server_host,
+            port: overrides.server_port,
+        });
+    }
+
+    if has_any(&[
+        overrides.admin_token.is_some(),
+        overrides.admin_token_file.is_some(),
+    ]) {
+        patch.admin = Some(AdminPatch {
+            token: overrides.admin_token,
+            token_file: overrides.admin_token_file.map(PathBuf::from),
+        });
+    }
+
+    if has_any(&[
+        overrides.hf_endpoint.is_some(),
+        overrides.hf_token.is_some(),
+        overrides.hf_proxy.is_some(),
+        overrides.hf_timeout.is_some(),
+        overrides.hf_connect_timeout.is_some(),
+    ]) {
+        patch.huggingface = Some(HfPatch {
+            endpoint: overrides.hf_endpoint,
+            token: overrides.hf_token,
+            proxy: overrides.hf_proxy,
+            timeout_secs: overrides.hf_timeout,
+            connect_timeout_secs: overrides.hf_connect_timeout,
+        });
+    }
+
+    if has_any(&[
+        overrides.ms_endpoint.is_some(),
+        overrides.ms_token.is_some(),
+        overrides.ms_proxy.is_some(),
+        overrides.ms_timeout.is_some(),
+        overrides.ms_connect_timeout.is_some(),
+    ]) {
+        patch.modelscope = Some(MsPatch {
+            endpoint: overrides.ms_endpoint,
+            token: overrides.ms_token,
+            proxy: overrides.ms_proxy,
+            timeout_secs: overrides.ms_timeout,
+            connect_timeout_secs: overrides.ms_connect_timeout,
+        });
+    }
+
+    Ok(patch)
+}
+
+fn env_patch() -> anyhow::Result<ConfigPatch> {
+    let mut patch = ConfigPatch::default();
+
+    let storage = StoragePatch {
+        backend: env_string("HUGRS_STORAGE_BACKEND"),
+        local_root: env_path("HUGRS_LOCAL_ROOT"),
+        s3_bucket: env_string("HUGRS_S3_BUCKET"),
+        s3_region: env_string("HUGRS_S3_REGION"),
+        s3_prefix: env_string("HUGRS_S3_PREFIX"),
+        s3_endpoint: env_string("HUGRS_S3_ENDPOINT"),
+        compression: env_parsed("HUGRS_COMPRESSION")?,
+        max_size: env_parsed("HUGRS_MAX_SIZE")?,
+        prefetch_depth: env_parsed("HUGRS_PREFETCH_DEPTH")?,
+        prefetch_budget_base: env_parsed("HUGRS_PREFETCH_BUDGET_BASE")?,
+        verify_sha256: env_parsed("HUGRS_VERIFY_SHA256")?,
+    };
+    if !storage_is_empty(&storage) {
+        patch.storage = Some(storage);
+    }
+
+    let database = DatabasePatch {
+        path: env_path("HUGRS_DB_PATH"),
+    };
+    if database.path.is_some() {
+        patch.database = Some(database);
+    }
+
+    let server = ServerPatch {
+        host: env_string("HUGRS_SERVER_HOST"),
+        port: env_parsed("HUGRS_SERVER_PORT")?,
+    };
+    if !server_is_empty(&server) {
+        patch.server = Some(server);
+    }
+
+    let admin = AdminPatch {
+        token: env_string("HUGRS_ADMIN_TOKEN"),
+        token_file: env_path("HUGRS_ADMIN_TOKEN_FILE"),
+    };
+    if !admin_is_empty(&admin) {
+        patch.admin = Some(admin);
+    }
+
+    let huggingface = HfPatch {
+        endpoint: env_string("HUGRS_HF_ENDPOINT"),
+        token: env_string("HUGRS_HF_TOKEN"),
+        proxy: env_string("HUGRS_HF_PROXY"),
+        timeout_secs: env_parsed("HUGRS_HF_TIMEOUT")?,
+        connect_timeout_secs: env_parsed("HUGRS_HF_CONNECT_TIMEOUT")?,
+    };
+    if !hf_is_empty(&huggingface) {
+        patch.huggingface = Some(huggingface);
+    }
+
+    let modelscope = MsPatch {
+        endpoint: env_string("HUGRS_MS_ENDPOINT"),
+        token: env_string("HUGRS_MS_TOKEN"),
+        proxy: env_string("HUGRS_MS_PROXY"),
+        timeout_secs: env_parsed("HUGRS_MS_TIMEOUT")?,
+        connect_timeout_secs: env_parsed("HUGRS_MS_CONNECT_TIMEOUT")?,
+    };
+    if !ms_is_empty(&modelscope) {
+        patch.modelscope = Some(modelscope);
+    }
+
+    Ok(patch)
+}
+
+fn env_string(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+}
+
+fn env_path(key: &str) -> Option<PathBuf> {
+    env_string(key).map(PathBuf::from)
+}
+
+fn env_parsed<T>(key: &str) -> anyhow::Result<Option<T>>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(key) {
+        Ok(value) => Ok(Some(
+            value
+                .parse()
+                .map_err(|err| anyhow::anyhow!("{key}: {err}"))?,
+        )),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn has_any(values: &[bool]) -> bool {
+    values.iter().any(|value| *value)
+}
+
+fn storage_is_empty(value: &StoragePatch) -> bool {
+    !has_any(&[
+        value.backend.is_some(),
+        value.local_root.is_some(),
+        value.s3_bucket.is_some(),
+        value.s3_region.is_some(),
+        value.s3_prefix.is_some(),
+        value.s3_endpoint.is_some(),
+        value.compression.is_some(),
+        value.max_size.is_some(),
+        value.prefetch_depth.is_some(),
+        value.prefetch_budget_base.is_some(),
+        value.verify_sha256.is_some(),
+    ])
+}
+
+fn server_is_empty(value: &ServerPatch) -> bool {
+    !has_any(&[value.host.is_some(), value.port.is_some()])
+}
+
+fn admin_is_empty(value: &AdminPatch) -> bool {
+    !has_any(&[value.token.is_some(), value.token_file.is_some()])
+}
+
+fn hf_is_empty(value: &HfPatch) -> bool {
+    !has_any(&[
+        value.endpoint.is_some(),
+        value.token.is_some(),
+        value.proxy.is_some(),
+        value.timeout_secs.is_some(),
+        value.connect_timeout_secs.is_some(),
+    ])
+}
+
+fn ms_is_empty(value: &MsPatch) -> bool {
+    !has_any(&[
+        value.endpoint.is_some(),
+        value.token.is_some(),
+        value.proxy.is_some(),
+        value.timeout_secs.is_some(),
+        value.connect_timeout_secs.is_some(),
+    ])
 }

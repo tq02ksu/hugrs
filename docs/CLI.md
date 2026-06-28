@@ -4,10 +4,24 @@
 
 HugRS has two binaries:
 
-- `hugrs`: starts the proxy daemon
+- `hugrs`: starts the proxy daemon and accepts daemon startup overrides
 - `hugrsctl`: management client for service, repo, and file inspection
 
 `hugrsctl` focuses on cache management only. Chunk-level internals are not exposed as user-facing resources.
+
+## `hugrs` Daemon Flags
+
+Common examples:
+
+```bash
+hugrs
+hugrs --config ./hugrs.toml
+hugrs --server-host 0.0.0.0 --server-port 3001
+hugrs --db-path /data/hugrs.db
+hugrs --local-root /data/chunks
+```
+
+Configuration precedence is documented in [CONFIG.md](CONFIG.md).
 
 ## Connection Defaults
 

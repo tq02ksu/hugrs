@@ -2,6 +2,7 @@ pub mod admin_client;
 pub mod chunker;
 pub mod config;
 pub mod control;
+pub mod daemon_cli;
 pub mod git;
 pub mod hf;
 pub mod hugrsctl_cli;

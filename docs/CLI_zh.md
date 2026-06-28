@@ -4,10 +4,24 @@
 
 HugRS 提供两个二进制：
 
-- `hugrs`：启动代理守护进程
+- `hugrs`：启动代理守护进程，并支持守护进程启动覆盖参数
 - `hugrsctl`：用于查看和管理 service、repo、file
 
 `hugrsctl` 只面向缓存管理，不暴露 chunk 级内部实现。
+
+## `hugrs` 守护进程参数
+
+常见示例：
+
+```bash
+hugrs
+hugrs --config ./hugrs.toml
+hugrs --server-host 0.0.0.0 --server-port 3001
+hugrs --db-path /data/hugrs.db
+hugrs --local-root /data/chunks
+```
+
+配置优先级请参考 [CONFIG_zh.md](CONFIG_zh.md)。
 
 ## 连接默认值
 

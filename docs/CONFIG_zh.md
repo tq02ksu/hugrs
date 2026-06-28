@@ -5,14 +5,24 @@
 配置按以下顺序加载，**后者覆盖前者**：
 
 ```
-默认值  →  hugrs.toml  →  .env  →  环境变量
-（最低）                                          （最高）
+默认值  →  hugrs.toml  →  .env  →  环境变量  →  hugrs 参数
+（最低）                                                        （最高）
 ```
 
 默认缓存目录：
 
 - macOS：`~/Library/Caches`
 - Linux：`~/.cache`
+
+## 各组件职责
+
+这些组件是配合关系，不是替代关系：
+
+- `clap`：解析命令行参数
+- `dotenvy`：把 `.env` 加载到进程环境变量
+- `figment`：合并默认值、配置文件、环境变量和命令行覆盖项
+
+真正的设计选择，是“自己手写 merge 逻辑”还是“交给 `figment` 统一处理”。HugRS 当前使用 `figment` 作为配置合并引擎。
 
 ## 配置方式一览
 
@@ -22,8 +32,9 @@
 | `hugrs.toml` | TOML | 先找 `./hugrs.toml`，没有则找 `~/.config/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | 当前目录下的环境文件 |
 | 环境变量 | `HUGRS_*` | 系统环境变量 |
+| `hugrs` 参数 | `--xxx` | 守护进程启动覆盖项，例如 `--config`、`--server-port` |
 
-### 示例：max_size 的三种配置方式
+### 示例：max_size 的四种配置方式
 
 ```bash
 # 1. hugrs.toml
@@ -35,6 +46,9 @@ HUGRS_MAX_SIZE=10737418240
 
 # 3. 环境变量
 export HUGRS_MAX_SIZE=10737418240
+
+# 4. hugrs 参数
+hugrs --max-size 10737418240
 ```
 
 ---
@@ -215,4 +229,16 @@ HUGRS_HF_CONNECT_TIMEOUT=15
 HUGRS_MS_ENDPOINT=https://modelscope.cn
 HUGRS_MS_TIMEOUT=60
 HUGRS_MS_CONNECT_TIMEOUT=15
+```
+
+## 常用 `hugrs` 参数
+
+这些参数作用于守护进程本身，不是 `hugrsctl` 参数。
+
+```bash
+hugrs --config ./hugrs.toml
+hugrs --server-host 0.0.0.0 --server-port 3001
+hugrs --db-path /data/hugrs.db
+hugrs --local-root /data/chunks
+hugrs --hf-endpoint https://hf-mirror.com
 ```
