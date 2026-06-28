@@ -660,11 +660,17 @@ async fn test_small_file_cache_hit_preserves_headers() {
 
     let head_resp = head("/org/repo/resolve/main/cfg.json").await;
     assert!(head_resp.status().is_success());
-    assert!(head_resp.headers().get("etag").is_some(), "HEAD should return etag");
+    assert!(
+        head_resp.headers().get("etag").is_some(),
+        "HEAD should return etag"
+    );
 
     let get1 = get("/org/repo/resolve/main/cfg.json").await;
     assert!(get1.status().is_success());
-    assert!(get1.headers().get("etag").is_some(), "first GET should return etag");
+    assert!(
+        get1.headers().get("etag").is_some(),
+        "first GET should return etag"
+    );
 
     let get2 = get("/org/repo/resolve/main/cfg.json").await;
     assert!(get2.status().is_success());
@@ -787,16 +793,32 @@ async fn test_redirect_cache_hit_preserves_headers() {
     };
 
     let head_resp = head("/org/repo/resolve/main/cfg.json").await;
-    assert!(head_resp.status().is_success(), "HEAD should succeed: {:?}", head_resp.status());
-    assert!(head_resp.headers().get("etag").is_some(), "HEAD should return etag");
-    assert!(head_resp.headers().get("x-repo-commit").is_some(), "HEAD should return x-repo-commit");
+    assert!(
+        head_resp.status().is_success(),
+        "HEAD should succeed: {:?}",
+        head_resp.status()
+    );
+    assert!(
+        head_resp.headers().get("etag").is_some(),
+        "HEAD should return etag"
+    );
+    assert!(
+        head_resp.headers().get("x-repo-commit").is_some(),
+        "HEAD should return x-repo-commit"
+    );
 
     let get1 = get("/org/repo/resolve/main/cfg.json").await;
     assert!(get1.status().is_success(), "first GET should succeed");
-    assert!(get1.headers().get("etag").is_some(), "first GET should return etag");
+    assert!(
+        get1.headers().get("etag").is_some(),
+        "first GET should return etag"
+    );
 
     let get2 = get("/org/repo/resolve/main/cfg.json").await;
-    assert!(get2.status().is_success(), "second GET (cache hit) should succeed");
+    assert!(
+        get2.status().is_success(),
+        "second GET (cache hit) should succeed"
+    );
     assert!(
         get2.headers().get("etag").is_some(),
         "second GET (cache hit, 302 upstream) should return etag"
@@ -837,7 +859,9 @@ async fn test_redirect_small_file_get_populates_db_headers() {
 
     let store = MetadataStore::new(&dir.path().join("http_db")).unwrap();
     let file = store.get_file_by_name("org/repo/cfg.json", "hf").unwrap();
-    let file = file.or_else(|| store.get_file_by_name("cfg.json", "hf").unwrap()).unwrap();
+    let file = file
+        .or_else(|| store.get_file_by_name("cfg.json", "hf").unwrap())
+        .unwrap();
 
     assert_eq!(file.etag.as_deref(), Some("\"final-etag\""));
     assert_eq!(file.x_repo_commit.as_deref(), Some("deadbeef"));

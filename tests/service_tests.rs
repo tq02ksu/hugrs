@@ -273,8 +273,24 @@ async fn test_upload_preserves_headers() {
         .unwrap();
 
     let f = metadata.get_file_by_name("f.bin", "hf").unwrap().unwrap();
-    assert_eq!(f.etag.as_deref(), Some("\"abc123\""), "etag should be preserved after upload");
-    assert_eq!(f.x_repo_commit.as_deref(), Some("953dc6f6"), "x_repo_commit should be preserved after upload");
-    assert_eq!(f.x_linked_etag.as_deref(), Some("\"abc123\""), "x_linked_etag should be preserved after upload");
-    assert_eq!(f.content_type.as_deref(), Some("text/plain; charset=utf-8"), "content_type should be preserved after upload");
+    assert_eq!(
+        f.etag.as_deref(),
+        Some("\"abc123\""),
+        "etag should be preserved after upload"
+    );
+    assert_eq!(
+        f.x_repo_commit.as_deref(),
+        Some("953dc6f6"),
+        "x_repo_commit should be preserved after upload"
+    );
+    assert_eq!(
+        f.x_linked_etag.as_deref(),
+        Some("\"abc123\""),
+        "x_linked_etag should be preserved after upload"
+    );
+    assert_eq!(
+        f.content_type.as_deref(),
+        Some("text/plain; charset=utf-8"),
+        "content_type should be preserved after upload"
+    );
 }
