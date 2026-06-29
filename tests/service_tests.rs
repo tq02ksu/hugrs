@@ -1,5 +1,5 @@
-use hugrs::metadata::MetadataStore;
 use hugrs::metadata::File;
+use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
 use hugrs::service::CHUNK_SIZE;
 use hugrs::storage::local::LocalBackend;

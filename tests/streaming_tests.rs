@@ -10,9 +10,9 @@ use hugrs::service::CacheService;
 use hugrs::storage::local::LocalBackend;
 use hugrs::storage::Compression;
 use std::collections::HashSet;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::TempDir;
 
 use hugrs::service::CHUNK_SIZE;
@@ -824,5 +824,8 @@ async fn test_corrupt_cached_chunk_returns_error_when_upstream_unavailable() {
         }
     }
 
-    assert!(saw_err, "corrupt chunk with failed upstream refetch should error");
+    assert!(
+        saw_err,
+        "corrupt chunk with failed upstream refetch should error"
+    );
 }

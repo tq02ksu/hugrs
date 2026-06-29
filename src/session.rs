@@ -504,12 +504,8 @@ impl FileDownloadSession {
                 {
                     Ok(rx) => rx,
                     Err(e) => {
-                        self.forward_error(anyhow::anyhow!(
-                            "chunk {} subscribe failed: {}",
-                            i,
-                            e
-                        ))
-                        .await;
+                        self.forward_error(anyhow::anyhow!("chunk {} subscribe failed: {}", i, e))
+                            .await;
                         break;
                     }
                 };
@@ -583,7 +579,8 @@ impl FileDownloadSession {
                         self.finish_prefetches(&completed, &HashSet::new());
                     }
                     Ok(Err(err)) => {
-                        self.forward_error(anyhow::anyhow!(err.as_ref().clone())).await;
+                        self.forward_error(anyhow::anyhow!(err.as_ref().clone()))
+                            .await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Closed) => {
