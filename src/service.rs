@@ -1047,12 +1047,11 @@ impl CacheService {
         }
 
         let total_size = file.total_size as u64;
+        let file_id = file.id;
         let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
         let client = self.http_client.clone();
         let url = url.to_string();
         let svc = self.clone();
-        let fname = name.to_string();
-        let frepo = file.repo.clone();
         let user_agent = user_agent.map(str::to_string);
         let fetched_bytes = self.fetched_bytes.clone();
         let served_bytes = self.served_bytes.clone();
@@ -1077,10 +1076,35 @@ impl CacheService {
                 }
             };
             fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-            if let Err(e) = svc.upload(&fname, &frepo, &source, data.to_vec()).await {
-                let _ = tx.send(Err(e)).await;
-                return;
+
+            let chunks = crate::chunker::chunk_with_hashes(&data, CHUNK_SIZE);
+            for chunk in &chunks {
+                if !svc.backend.exists(&chunk.sha256).await.unwrap_or(false) {
+                    if let Err(e) = svc.backend.put(&chunk.sha256, &chunk.data).await {
+                        let _ = tx.send(Err(anyhow::anyhow!("chunk store error: {}", e))).await;
+                        return;
+                    }
+                }
+                let path = svc.chunk_path(&chunk.sha256);
+                if let Err(e) = svc.metadata.ensure_chunk(
+                    &chunk.sha256, "local", &path,
+                    chunk.chunk_size as i64,
+                    chunk.chunk_size as i64,
+                ) {
+                    let _ = tx.send(Err(e)).await;
+                    return;
+                }
+                if let Err(e) = svc.metadata.link_file_chunk(
+                    file_id,
+                    &chunk.sha256,
+                    chunk.chunk_index as i64,
+                    chunk.chunk_size as i64,
+                ) {
+                    let _ = tx.send(Err(e)).await;
+                    return;
+                }
             }
+
             served_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
             let _ = tx.send(Ok(data)).await;
         });
