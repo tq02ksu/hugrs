@@ -429,6 +429,30 @@ pub async fn ms_repo_file_proxy(
     .await
 }
 
+fn etag_matches_any(cached_etag: &str, if_none_match: &str) -> bool {
+    let cached_stripped = cached_etag.trim_start_matches("W/").trim_matches('"');
+    if_none_match
+        .split(',')
+        .map(|s| s.trim().trim_start_matches("W/").trim_matches('"'))
+        .filter(|s| !s.is_empty())
+        .any(|e| e == cached_stripped)
+}
+
+fn build_304_response(file: &crate::metadata::File) -> Result<Response, AppError> {
+    let mut resp = Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header("Content-Length", file.total_size)
+        .header("Accept-Ranges", "bytes");
+    if let Some(ref etag) = file.etag {
+        resp = resp.header("ETag", etag);
+    }
+    if let Some(ref ct) = file.content_type {
+        resp = resp.header("Content-Type", ct);
+    }
+    resp.body(axum::body::Body::empty())
+        .map_err(|e| AppError::Anyhow(e.into()))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn file_proxy_inner(
     state: AppState,
@@ -451,22 +475,64 @@ async fn file_proxy_inner(
         }
     };
     let range = parse_range(&headers);
+    let if_none_match = headers
+        .get("if-none-match")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
     if method == Method::HEAD {
-        let service = state.service.lock().await;
-        if let Ok(Some(file)) = service.info(&cache_name, source).await {
-            if file.x_repo_commit.is_some() {
-                tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
-                return build_head_response(&file, &path);
-            }
-            tracing::debug!(
-                "HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}",
-                cache_name
-            );
-        }
-        drop(service);
+        let mut proceed_to_upstream = true;
+        {
+            let service = state.service.lock().await;
+            if let Ok(Some(file)) = service.info(&cache_name, source).await {
+                if file.x_repo_commit.is_some() {
+                    let should_serve_cached = if let Some(ref cached_etag) = file.etag {
+                        let cached_etag = cached_etag.clone();
+                        drop(service);
+                        match state
+                            .service
+                            .lock()
+                            .await
+                            .validate_file_etag(
+                                &url, &cache_name, &repo_id, source,
+                                user_agent.as_deref(), &cached_etag,
+                            )
+                            .await
+                        {
+                            Ok(true) => true,
+                            Ok(false) => false,
+                            Err(e) => {
+                                tracing::warn!("HEAD etag validation failed ({}), serving degraded: {}", e, cache_name);
+                                true
+                            }
+                        }
+                    } else {
+                        true
+                    };
 
-        tracing::info!("HEAD proxy to upstream: {}", url);
+                    if should_serve_cached {
+                        let service = state.service.lock().await;
+                        if let Ok(Some(file)) = service.info(&cache_name, source).await {
+                            tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
+                            return build_head_response(&file, &path);
+                        }
+                    } else {
+                        let service = state.service.lock().await;
+                        let _ = service.metadata.delete_file(&cache_name, source);
+                        // Fall through to upstream HEAD fetch
+                    }
+                    proceed_to_upstream = false;
+                } else {
+                    tracing::debug!("HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}", cache_name);
+                    proceed_to_upstream = true;
+                }
+            } else {
+                proceed_to_upstream = true;
+            }
+        } // service lock dropped
+
+        if proceed_to_upstream {
+            tracing::info!("HEAD proxy to upstream: {}", url);
         let mut req = if first_hop_get {
             head_client.get(&url)
         } else {
@@ -591,6 +657,7 @@ async fn file_proxy_inner(
         return builder
             .body(axum::body::Body::empty())
             .map_err(|e| AppError::Anyhow(e.into()));
+        } // end if proceed_to_upstream
     }
 
     // GET
@@ -652,6 +719,17 @@ async fn file_proxy_inner(
                     e,
                     cache_name
                 );
+            }
+        }
+    }
+
+    // If-None-Match: return 304 if client's etag matches our validated cache
+    if let (Some(ref inm), Some(ref etag)) = (&if_none_match, &cached_etag) {
+        if etag_matches_any(etag, inm) {
+            let service = state.service.lock().await;
+            if let Ok(Some(file)) = service.info(&cache_name, source).await {
+                tracing::debug!("If-None-Match hit, returning 304: {}", cache_name);
+                return build_304_response(&file);
             }
         }
     }
