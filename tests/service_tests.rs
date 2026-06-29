@@ -1,9 +1,49 @@
 use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
+use hugrs::service::CHUNK_SIZE;
 use hugrs::storage::local::LocalBackend;
 use hugrs::storage::Compression;
 use std::sync::Arc;
 use tempfile::TempDir;
+
+async fn seed_file(
+    svc: &CacheService,
+    name: &str,
+    repo: &str,
+    source: &str,
+    data: &[u8],
+) {
+    let existing = svc.metadata.get_file_by_name(name, source).unwrap();
+    svc.metadata.delete_file(name, source).ok();
+    let file = svc.metadata.add_file(name, repo, data.len() as i64, source).unwrap();
+    if let Some(ref h) = existing {
+        svc.metadata.set_file_headers(
+            name, source,
+            h.etag.as_deref(),
+            h.x_repo_commit.as_deref(),
+            h.x_linked_size,
+            h.x_linked_etag.as_deref(),
+            h.content_type.as_deref(),
+        ).unwrap();
+    }
+    let chunks = hugrs::chunker::chunk_with_hashes(data, CHUNK_SIZE);
+    for chunk in &chunks {
+        svc.backend.put(&chunk.sha256, &chunk.data).await.unwrap();
+        let path = svc.chunk_path(&chunk.sha256);
+        svc.metadata.ensure_chunk(
+            &chunk.sha256, "local", &path,
+            chunk.chunk_size as i64, chunk.chunk_size as i64,
+        ).unwrap();
+        svc.metadata.link_file_chunk(
+            file.id, &chunk.sha256,
+            chunk.chunk_index as i64, chunk.chunk_size as i64,
+        ).unwrap();
+    }
+    svc.metadata.touch_repo(repo).unwrap();
+    if let Some(limit) = svc.max_size {
+        let _ = svc.evict_if_needed(limit).await;
+    }
+}
 
 #[tokio::test]
 async fn test_upload_and_download() {
@@ -27,10 +67,7 @@ async fn test_upload_and_download() {
     );
 
     let data = b"hello hugrs cache service";
-    service
-        .upload("test.bin", "test-repo", "hf", data.to_vec())
-        .await
-        .unwrap();
+    seed_file(&service, "test.bin", "test-repo", "hf", data).await;
 
     let file = service.info("test.bin", "hf").await.unwrap().unwrap();
     assert_eq!(file.name, "test.bin");
@@ -65,10 +102,7 @@ async fn test_delete_and_gc() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3])
-        .await
-        .unwrap();
+    seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3]).await;
     assert!(service.info("x.bin", "hf").await.unwrap().is_some());
 
     service.delete("x.bin", "hf").await.unwrap();
@@ -104,10 +138,7 @@ async fn test_stats() {
     assert_eq!(stats.original_bytes, 0);
     assert_eq!(stats.stored_bytes, 0);
 
-    service
-        .upload("f.bin", "test-repo", "hf", vec![5; 100])
-        .await
-        .unwrap();
+    seed_file(&service, "f.bin", "test-repo", "hf", &[5; 100]).await;
 
     let stats = service.stats().await.unwrap();
     assert_eq!(stats.file_count, 1);
@@ -138,14 +169,8 @@ async fn test_upload_duplicate_file_overwrites() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("dup.bin", "repo-a", "hf", vec![1, 2, 3])
-        .await
-        .unwrap();
-    service
-        .upload("dup.bin", "repo-a", "hf", vec![4, 5, 6])
-        .await
-        .unwrap();
+    seed_file(&service, "dup.bin", "repo-a", "hf", &vec![1, 2, 3]).await;
+    seed_file(&service, "dup.bin", "repo-a", "hf", &vec![4, 5, 6]).await;
 
     let downloaded = service.download("dup.bin", "hf").await.unwrap();
     assert_eq!(downloaded, vec![4, 5, 6]);
@@ -172,14 +197,8 @@ async fn test_lru_eviction() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("big.bin", "repo-big", "hf", vec![0u8; 250])
-        .await
-        .unwrap();
-    service
-        .upload("small.bin", "repo-small", "hf", vec![1u8; 100])
-        .await
-        .unwrap();
+    seed_file(&service, "big.bin", "repo-big", "hf", &vec![0u8; 250]).await;
+    seed_file(&service, "small.bin", "repo-small", "hf", &vec![1u8; 100]).await;
 
     let files = service.list().await.unwrap();
     let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
@@ -208,18 +227,9 @@ async fn test_lru_eviction_by_repo() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("a.txt", "repo-a", "hf", vec![1u8; 100])
-        .await
-        .unwrap();
-    service
-        .upload("b.txt", "repo-a", "hf", vec![2u8; 100])
-        .await
-        .unwrap();
-    service
-        .upload("c.txt", "repo-b", "hf", vec![3u8; 100])
-        .await
-        .unwrap();
+    seed_file(&service, "a.txt", "repo-a", "hf", &vec![1u8; 100]).await;
+    seed_file(&service, "b.txt", "repo-a", "hf", &vec![2u8; 100]).await;
+    seed_file(&service, "c.txt", "repo-b", "hf", &vec![3u8; 100]).await;
 
     let files = service.list().await.unwrap();
     let repos: std::collections::HashSet<&str> = files.iter().map(|f| f.repo.as_str()).collect();
@@ -267,10 +277,7 @@ async fn test_upload_preserves_headers() {
     assert_eq!(f.x_repo_commit.as_deref(), Some("953dc6f6"));
     assert_eq!(f.content_type.as_deref(), Some("text/plain; charset=utf-8"));
 
-    service
-        .upload("f.bin", "test-repo", "hf", vec![0u8; 795])
-        .await
-        .unwrap();
+    seed_file(&service, "f.bin", "test-repo", "hf", &vec![0u8; 795]).await;
 
     let f = metadata.get_file_by_name("f.bin", "hf").unwrap().unwrap();
     assert_eq!(
@@ -316,10 +323,7 @@ async fn test_delete_marks_zero_ref_chunks_orphaned() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
-        .await
-        .unwrap();
+    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
 
     let deleted = service
         .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
@@ -354,10 +358,7 @@ async fn test_delete_does_not_remove_backend_data_immediately() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
-        .await
-        .unwrap();
+    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
 
     let file = metadata.get_file_by_name("x.bin", "hf").unwrap().unwrap();
     let sha = metadata.get_file_chunks(file.id).unwrap()[0].sha256.clone();
@@ -391,14 +392,8 @@ async fn test_delete_without_source_removes_all_sources() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
-        .await
-        .unwrap();
-    service
-        .upload("x.bin", "repo-a", "ms", vec![1, 2, 3, 4])
-        .await
-        .unwrap();
+    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "ms", &vec![1, 2, 3, 4]).await;
 
     let deleted = service
         .delete_file_all_sources("repo-a", "x.bin", None)
@@ -431,10 +426,7 @@ async fn test_gc_dry_run_reports_orphan_candidates() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
-        .await
-        .unwrap();
+    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
     service
         .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
         .await
@@ -466,10 +458,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         reqwest::Client::new(),
     );
 
-    service
-        .upload("x.bin", "repo-a", "hf", vec![1, 2, 3, 4])
-        .await
-        .unwrap();
+    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
 
     let file = metadata.get_file_by_name("x.bin", "hf").unwrap().unwrap();
     let sha = metadata.get_file_chunks(file.id).unwrap()[0].sha256.clone();

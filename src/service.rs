@@ -46,7 +46,7 @@ struct DownloadedChunk {
 pub struct CacheService {
     pub metadata: Arc<MetadataStore>,
     pub backend: Arc<dyn StorageBackend>,
-    max_size: Option<u64>,
+    pub max_size: Option<u64>,
     pub http_client: reqwest::Client,
     pub head_client: reqwest::Client,
     prefetch_depth: usize,
@@ -129,68 +129,6 @@ impl CacheService {
             served_bytes,
             fs_manager,
         }
-    }
-
-    pub async fn upload(
-        &self,
-        name: &str,
-        repo: &str,
-        source: &str,
-        data: Vec<u8>,
-    ) -> anyhow::Result<()> {
-        let total_size = data.len() as i64;
-
-        let existing_headers = self.metadata.get_file_by_name(name, source)?;
-
-        self.metadata.delete_file(name, source)?;
-
-        let chunks = chunker::chunk_with_hashes(&data, CHUNK_SIZE);
-
-        let file = self.metadata.add_file(name, repo, total_size, source)?;
-
-        if let Some(ref h) = existing_headers {
-            self.metadata.set_file_headers(
-                name,
-                source,
-                h.etag.as_deref(),
-                h.x_repo_commit.as_deref(),
-                h.x_linked_size,
-                h.x_linked_etag.as_deref(),
-                h.content_type.as_deref(),
-            )?;
-        }
-
-        for chunk in &chunks {
-            let stored_size: i64 = if !self.backend.exists(&chunk.sha256).await? {
-                self.backend.put(&chunk.sha256, &chunk.data).await? as i64
-            } else {
-                chunk.chunk_size as i64
-            };
-
-            let path = self.chunk_path(&chunk.sha256);
-            self.metadata.ensure_chunk(
-                &chunk.sha256,
-                "local",
-                &path,
-                chunk.chunk_size as i64,
-                stored_size,
-            )?;
-
-            self.metadata.link_file_chunk(
-                file.id,
-                &chunk.sha256,
-                chunk.chunk_index as i64,
-                chunk.chunk_size as i64,
-            )?;
-        }
-
-        self.metadata.touch_repo(repo)?;
-
-        if let Some(limit) = self.max_size {
-            self.evict_if_needed(limit).await?;
-        }
-
-        Ok(())
     }
 
     pub async fn download_from_url(
@@ -652,7 +590,7 @@ impl CacheService {
         Ok(self.gc_execute(usize::MAX).await?.deleted_chunks)
     }
 
-    async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
+    pub async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
         loop {
             let stats = self.metadata.get_stats()?;
             if stats.original_bytes as u64 <= max_size {
@@ -678,7 +616,7 @@ impl CacheService {
         Ok(())
     }
 
-    fn chunk_path(&self, sha256: &str) -> String {
+    pub fn chunk_path(&self, sha256: &str) -> String {
         format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256)
     }
 
