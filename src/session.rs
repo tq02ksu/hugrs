@@ -15,6 +15,7 @@ pub const CHUNK_SIZE: usize = crate::service::CHUNK_SIZE;
 type ClientRange = (u64, u64);
 type ClientSender = mpsc::Sender<Result<Bytes, anyhow::Error>>;
 type Subscribers = StdMutex<Vec<(ClientRange, ClientSender)>>;
+type ChunkMessage = Result<Arc<Bytes>, Arc<String>>;
 
 fn prefetch_budget(base: usize, active_cursors: usize) -> usize {
     match active_cursors {
@@ -78,16 +79,21 @@ pub struct ChunkStoredEvent {
 // ── ChunkSession ──────────────────────────────────────────────
 
 pub struct ChunkSession {
-    pub tx: broadcast::Sender<Arc<Bytes>>,
+    pub tx: broadcast::Sender<ChunkMessage>,
     _task: JoinHandle<()>,
 }
 
-pub struct SessionTable {
-    map: Arc<DashMap<(i64, i64), Arc<ChunkSession>>>,
+struct ChunkReader {
     http_client: reqwest::Client,
     backend: Arc<dyn StorageBackend>,
     event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
     fetched_bytes: Arc<AtomicU64>,
+    verify_sha256: bool,
+}
+
+pub struct SessionTable {
+    map: Arc<DashMap<(i64, i64), Arc<ChunkSession>>>,
+    reader: Arc<ChunkReader>,
 }
 
 impl SessionTable {
@@ -96,13 +102,17 @@ impl SessionTable {
         backend: Arc<dyn StorageBackend>,
         event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
         fetched_bytes: Arc<AtomicU64>,
+        verify_sha256: bool,
     ) -> Self {
         Self {
             map: Arc::new(DashMap::new()),
-            http_client,
-            backend,
-            event_tx,
-            fetched_bytes,
+            reader: Arc::new(ChunkReader {
+                http_client,
+                backend,
+                event_tx,
+                fetched_bytes,
+                verify_sha256,
+            }),
         }
     }
 
@@ -118,8 +128,12 @@ impl SessionTable {
         chunk_count: usize,
         user_agent: Option<&str>,
         cached_chunks: &Arc<StdMutex<HashMap<usize, String>>>,
-    ) -> broadcast::Receiver<Arc<Bytes>> {
+    ) -> anyhow::Result<broadcast::Receiver<ChunkMessage>> {
         let key = (file_id, chunk_idx);
+
+        if let Some(session) = self.map.get(&key) {
+            return Ok(session.tx.subscribe());
+        }
 
         let cached_sha = cached_chunks
             .lock()
@@ -127,56 +141,50 @@ impl SessionTable {
             .get(&(chunk_idx as usize))
             .cloned();
         if let Some(ref sha) = cached_sha {
-            if let Ok(data) = self.backend.get(sha).await {
-                let (tx, _) = broadcast::channel::<Arc<Bytes>>(1);
+            if let Some(data) = self.reader.read_cached_chunk(sha).await? {
+                let (tx, _) = broadcast::channel::<ChunkMessage>(1);
                 let rx = tx.subscribe();
-                let _ = tx.send(Arc::new(Bytes::from(data)));
-                return rx;
+                let _ = tx.send(Ok(Arc::new(data)));
+                return Ok(rx);
             }
         }
 
         if let Some(session) = self.map.get(&key) {
-            return session.tx.subscribe();
+            return Ok(session.tx.subscribe());
         }
 
-        let (tx, _) = broadcast::channel::<Arc<Bytes>>(4);
+        let (tx, _) = broadcast::channel::<ChunkMessage>(4);
         let rx = tx.subscribe();
 
-        let backend = self.backend.clone();
-        let event_tx = self.event_tx.clone();
-        let client = self.http_client.clone();
+        let reader = self.reader.clone();
         let url = url.to_string();
         let tx2 = tx.clone();
-        let fetched_bytes = self.fetched_bytes.clone();
         let map = self.map.clone();
         let user_agent = user_agent.map(str::to_string);
         let cached_chunks = cached_chunks.clone();
         let task = tokio::spawn(async move {
-            match Self::download_and_store(
-                client,
-                backend,
-                event_tx,
-                url,
-                fetched_bytes,
-                file_id,
-                chunk_idx,
-                start,
-                end,
-                total_size,
-                chunk_count,
-                user_agent,
-                cached_chunks,
-            )
-            .await
-            {
-                Ok(Some(data)) => {
-                    let _ = tx.send(Arc::new(data));
+            let result = reader
+                .fetch_chunk(
+                    url,
+                    file_id,
+                    chunk_idx,
+                    start,
+                    end,
+                    total_size,
+                    chunk_count,
+                    user_agent,
+                    cached_chunks,
+                )
+                .await;
+            match result {
+                Ok(data) => {
+                    let _ = tx.send(Ok(Arc::new(data)));
                 }
-                Ok(None) => {}
                 Err(e) => {
                     tracing::warn!("chunk {} download failed: {:?}", chunk_idx, e);
+                    let _ = tx.send(Err(Arc::new(e.to_string())));
                 }
-            }
+            };
             map.remove(&key);
         });
 
@@ -187,16 +195,45 @@ impl SessionTable {
                 _task: task,
             }),
         );
-        rx
+        Ok(rx)
+    }
+}
+
+impl ChunkReader {
+    async fn read_cached_chunk(&self, sha256: &str) -> anyhow::Result<Option<Bytes>> {
+        let raw = match self.backend.get(sha256).await {
+            Ok(raw) => raw,
+            Err(_) => return Ok(None),
+        };
+
+        if !self.verify_sha256 {
+            return Ok(Some(Bytes::from(raw)));
+        }
+
+        let (raw, actual) = tokio::task::spawn_blocking(move || {
+            let actual = chunker::sha256_hex(&raw);
+            (raw, actual)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("sha256 panicked: {}", e))?;
+
+        if actual == sha256 {
+            return Ok(Some(Bytes::from(raw)));
+        }
+
+        tracing::error!(
+            "checksum mismatch for cached chunk: expected {} got {}",
+            sha256,
+            actual
+        );
+        let _ = self.backend.delete(sha256).await;
+        Ok(None)
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn download_and_store(
-        client: reqwest::Client,
-        backend: Arc<dyn StorageBackend>,
-        event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
+    async fn fetch_chunk(
+        &self,
         url: String,
-        fetched_bytes: Arc<AtomicU64>,
         file_id: i64,
         chunk_idx: i64,
         start: u64,
@@ -205,9 +242,9 @@ impl SessionTable {
         chunk_count: usize,
         user_agent: Option<String>,
         cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
-    ) -> anyhow::Result<Option<Bytes>> {
+    ) -> anyhow::Result<Bytes> {
         let range_header = format!("bytes={}-{}", start, end);
-        let mut req = client.get(&url).header("Range", &range_header);
+        let mut req = self.http_client.get(&url).header("Range", &range_header);
         if let Some(ref ua) = user_agent {
             req = req.header("User-Agent", ua);
         }
@@ -215,11 +252,14 @@ impl SessionTable {
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("chunk {} request error: {}", chunk_idx, e))?
+            .error_for_status()
+            .map_err(|e| anyhow::anyhow!("chunk {} request error: {}", chunk_idx, e))?
             .bytes()
             .await
             .map_err(|e| anyhow::anyhow!("chunk {} download error: {}", chunk_idx, e))?;
 
-        fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
+        self.fetched_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
 
         let (sha256, data) = tokio::task::spawn_blocking(move || {
             let h = chunker::sha256_hex(&data);
@@ -228,8 +268,27 @@ impl SessionTable {
         .await
         .map_err(|e| anyhow::anyhow!("chunk {} sha256 panicked: {}", chunk_idx, e))?;
 
-        let stored_size: i64 = if !backend.exists(&sha256).await.unwrap_or(false) {
-            backend.put(&sha256, &data).await? as i64
+        let expected_sha = cached_chunks
+            .lock()
+            .unwrap()
+            .get(&(chunk_idx as usize))
+            .cloned();
+        if self.verify_sha256
+            && expected_sha
+                .as_ref()
+                .map(|expected| expected != &sha256)
+                .unwrap_or(false)
+        {
+            anyhow::bail!(
+                "checksum mismatch for chunk {}: expected {} got {}",
+                chunk_idx,
+                expected_sha.unwrap_or_default(),
+                sha256
+            );
+        }
+
+        let stored_size: i64 = if !self.backend.exists(&sha256).await.unwrap_or(false) {
+            self.backend.put(&sha256, &data).await? as i64
         } else {
             data.len() as i64
         };
@@ -239,7 +298,7 @@ impl SessionTable {
             .lock()
             .unwrap()
             .insert(chunk_idx as usize, sha256.clone());
-        let _ = event_tx.send(ChunkStoredEvent {
+        let _ = self.event_tx.send(ChunkStoredEvent {
             sha256: sha256.clone(),
             path,
             data_len: data.len() as i64,
@@ -256,7 +315,7 @@ impl SessionTable {
             data.len()
         );
 
-        Ok(Some(data))
+        Ok(Bytes::from(data))
     }
 }
 
@@ -428,7 +487,7 @@ impl FileDownloadSession {
                 let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
 
                 let chunk_start = std::time::Instant::now();
-                let mut rx = self
+                let mut rx = match self
                     .session_table
                     .subscribe(
                         self.file_id,
@@ -441,10 +500,22 @@ impl FileDownloadSession {
                         self.user_agent.as_deref(),
                         &self.cached_chunks,
                     )
-                    .await;
+                    .await
+                {
+                    Ok(rx) => rx,
+                    Err(e) => {
+                        self.forward_error(anyhow::anyhow!(
+                            "chunk {} subscribe failed: {}",
+                            i,
+                            e
+                        ))
+                        .await;
+                        break;
+                    }
+                };
 
                 match rx.recv().await {
-                    Ok(data) => {
+                    Ok(Ok(data)) => {
                         let elapsed_ms = chunk_start.elapsed().as_millis();
                         let chunk_start = i as u64 * chunk_sz;
                         self.forward_chunk(chunk_start, &data).await;
@@ -511,11 +582,26 @@ impl FileDownloadSession {
                         }
                         self.finish_prefetches(&completed, &HashSet::new());
                     }
+                    Ok(Err(err)) => {
+                        self.forward_error(anyhow::anyhow!(err.as_ref().clone())).await;
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => {
-                        tracing::warn!("chunk {} download closed unexpectedly", i);
+                        self.forward_error(anyhow::anyhow!(
+                            "chunk {} download closed unexpectedly",
+                            i
+                        ))
+                        .await;
+                        break;
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("chunk {} receiver lagged by {} messages", i, n);
+                        self.forward_error(anyhow::anyhow!(
+                            "chunk {} receiver lagged by {} messages",
+                            i,
+                            n
+                        ))
+                        .await;
+                        break;
                     }
                 }
             } else {
@@ -581,6 +667,17 @@ impl FileDownloadSession {
             };
             let slice = Bytes::copy_from_slice(&data[sl_start..sl_end]);
             if tx.send(Ok(slice)).await.is_err() {}
+        }
+    }
+
+    async fn forward_error(&self, err: anyhow::Error) {
+        let message = err.to_string();
+        let targets: Vec<ClientSender> = {
+            let subs = self.subscribers.lock().unwrap();
+            subs.iter().map(|(_, tx)| tx.clone()).collect()
+        };
+        for tx in &targets {
+            let _ = tx.send(Err(anyhow::anyhow!(message.clone()))).await;
         }
     }
 
@@ -744,6 +841,7 @@ mod tests {
             backend,
             event_tx,
             fetched_bytes,
+            true,
         ));
 
         let session = Arc::new(FileDownloadSession::new(
@@ -788,6 +886,7 @@ mod tests {
             backend,
             event_tx,
             fetched_bytes,
+            true,
         ));
 
         let session = FileDownloadSession::new(

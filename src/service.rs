@@ -111,6 +111,7 @@ impl CacheService {
             backend.clone(),
             event_tx,
             fetched_bytes.clone(),
+            verify_sha256,
         ));
 
         let fs_manager = Arc::new(crate::session::FileSessionManager::new(
@@ -396,38 +397,6 @@ impl CacheService {
         }
 
         Ok(())
-    }
-
-    pub async fn download(&self, name: &str, source: &str) -> anyhow::Result<Vec<u8>> {
-        let file = self
-            .metadata
-            .get_file_by_name(name, source)?
-            .ok_or_else(|| anyhow::anyhow!("file not found: {}", name))?;
-
-        let repo = file.repo.clone();
-        self.metadata.touch_repo(&repo)?;
-
-        let file_chunks = self.metadata.get_file_chunks(file.id)?;
-        let mut chunks = Vec::new();
-
-        for ft in &file_chunks {
-            let data = self.backend.get(&ft.sha256).await?;
-            let actual_hash = chunker::sha256_hex(&data);
-            if actual_hash != ft.sha256 {
-                tracing::error!(
-                    "checksum mismatch for {} chunk {}: expected {} got {}",
-                    name,
-                    ft.chunk_index,
-                    ft.sha256,
-                    actual_hash
-                );
-                let _ = self.backend.delete(&ft.sha256).await;
-                anyhow::bail!("checksum mismatch for {} chunk {}", name, ft.chunk_index);
-            }
-            chunks.push(data);
-        }
-
-        Ok(chunker::assemble_chunks(&chunks))
     }
 
     pub async fn is_file_complete(&self, name: &str, source: &str) -> anyhow::Result<bool> {
@@ -823,6 +792,36 @@ impl CacheService {
         Ok((file, content_length, ReceiverStream::new(rx)))
     }
 
+    pub async fn stream_http_file(
+        &self,
+        url: &str,
+        file: &File,
+        range_start: Option<u64>,
+        range_end: Option<u64>,
+        user_agent: Option<&str>,
+    ) -> anyhow::Result<(File, u64, ByteStream)> {
+        let total_size = file.total_size as u64;
+        let file_chunks = self.metadata.get_file_chunks(file.id)?;
+        let cached_chunks: HashMap<usize, String> = file_chunks
+            .iter()
+            .map(|fc| (fc.chunk_index as usize, fc.sha256.clone()))
+            .collect();
+
+        let session = self.fs_manager.get_or_create(
+            file.id,
+            &file.name,
+            url,
+            total_size,
+            self.prefetch_budget_base,
+            user_agent,
+            cached_chunks,
+            file.clone(),
+        );
+        session
+            .subscribe(Some((range_start.unwrap_or(0), range_end)))
+            .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn stream_from_upstream(
         &self,
@@ -841,30 +840,7 @@ impl CacheService {
             .metadata
             .get_file_by_name(name, source)?
             .ok_or_else(|| anyhow::anyhow!("file disappeared after creation"))?;
-        let total_size = file.total_size as u64;
-
-        if total_size <= CHUNK_SIZE as u64 {
-            return self.stream_small_file(url, name, &file, user_agent).await;
-        }
-
-        let file_chunks = self.metadata.get_file_chunks(file.id)?;
-        let cached_chunks: HashMap<usize, String> = file_chunks
-            .iter()
-            .map(|fc| (fc.chunk_index as usize, fc.sha256.clone()))
-            .collect();
-
-        let session = self.fs_manager.get_or_create(
-            file.id,
-            name,
-            url,
-            total_size,
-            self.prefetch_budget_base,
-            user_agent,
-            cached_chunks,
-            file.clone(),
-        );
-        session
-            .subscribe(Some((range_start.unwrap_or(0), range_end)))
+        self.stream_http_file(url, &file, range_start, range_end, user_agent)
             .await
     }
 
@@ -1017,88 +993,6 @@ impl CacheService {
             Some(ref ue) => Ok(ue == cached_etag),
             None => Ok(true),
         }
-    }
-
-    async fn stream_small_file(
-        &self,
-        url: &str,
-        name: &str,
-        file: &File,
-        user_agent: Option<&str>,
-    ) -> anyhow::Result<(File, u64, ByteStream)> {
-        let source = file.source.clone();
-        if self.is_file_complete(name, &source).await? {
-            return self.stream_cached_file(name, &source, None, None).await;
-        }
-
-        let total_size = file.total_size as u64;
-        let file_id = file.id;
-        let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
-        let client = self.http_client.clone();
-        let url = url.to_string();
-        let svc = self.clone();
-        let user_agent = user_agent.map(str::to_string);
-        let fetched_bytes = self.fetched_bytes.clone();
-        let served_bytes = self.served_bytes.clone();
-
-        tokio::spawn(async move {
-            let mut req = client.get(&url);
-            if let Some(ref ua) = user_agent {
-                req = req.header("User-Agent", ua);
-            }
-            let resp = match req.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = tx.send(Err(anyhow::anyhow!("request error: {}", e))).await;
-                    return;
-                }
-            };
-            let data = match resp.bytes().await {
-                Ok(d) => d,
-                Err(e) => {
-                    let _ = tx.send(Err(anyhow::anyhow!("download error: {}", e))).await;
-                    return;
-                }
-            };
-            fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-
-            let chunks = crate::chunker::chunk_with_hashes(&data, CHUNK_SIZE);
-            for chunk in &chunks {
-                if !svc.backend.exists(&chunk.sha256).await.unwrap_or(false) {
-                    if let Err(e) = svc.backend.put(&chunk.sha256, &chunk.data).await {
-                        let _ = tx
-                            .send(Err(anyhow::anyhow!("chunk store error: {}", e)))
-                            .await;
-                        return;
-                    }
-                }
-                let path = svc.chunk_path(&chunk.sha256);
-                if let Err(e) = svc.metadata.ensure_chunk(
-                    &chunk.sha256,
-                    "local",
-                    &path,
-                    chunk.chunk_size as i64,
-                    chunk.chunk_size as i64,
-                ) {
-                    let _ = tx.send(Err(e)).await;
-                    return;
-                }
-                if let Err(e) = svc.metadata.link_file_chunk(
-                    file_id,
-                    &chunk.sha256,
-                    chunk.chunk_index as i64,
-                    chunk.chunk_size as i64,
-                ) {
-                    let _ = tx.send(Err(e)).await;
-                    return;
-                }
-            }
-
-            served_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-            let _ = tx.send(Ok(data)).await;
-        });
-
-        Ok((file.clone(), total_size, ReceiverStream::new(rx)))
     }
 
     // TRANSITIONAL: remove in v0.X.0 ──────────────────────────

@@ -1,4 +1,5 @@
 use hugrs::metadata::MetadataStore;
+use hugrs::metadata::File;
 use hugrs::service::CacheService;
 use hugrs::service::CHUNK_SIZE;
 use hugrs::storage::local::LocalBackend;
@@ -54,8 +55,19 @@ async fn seed_file(svc: &CacheService, name: &str, repo: &str, source: &str, dat
     }
 }
 
+async fn read_seeded_file(svc: &CacheService, file: &File) -> Vec<u8> {
+    let file_chunks = svc.metadata.get_file_chunks(file.id).unwrap();
+    let mut chunks = Vec::with_capacity(file_chunks.len());
+    for ft in &file_chunks {
+        let data = svc.backend.get(&ft.sha256).await.unwrap();
+        assert_eq!(hugrs::chunker::sha256_hex(&data), ft.sha256);
+        chunks.push(data);
+    }
+    hugrs::chunker::assemble_chunks(&chunks)
+}
+
 #[tokio::test]
-async fn test_upload_and_download() {
+async fn test_seeded_file_chunks_reassemble_to_original_data() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
@@ -84,7 +96,7 @@ async fn test_upload_and_download() {
     assert_eq!(file.repo, "test-repo");
     assert_eq!(file.total_size as usize, data.len());
 
-    let downloaded = service.download("test.bin", "hf").await.unwrap();
+    let downloaded = read_seeded_file(&service, &file).await;
     assert_eq!(downloaded, data);
 
     let files = service.list().await.unwrap();
@@ -161,7 +173,7 @@ async fn test_stats() {
 }
 
 #[tokio::test]
-async fn test_upload_duplicate_file_overwrites() {
+async fn test_overwriting_seeded_file_updates_chunk_mapping() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
@@ -185,7 +197,8 @@ async fn test_upload_duplicate_file_overwrites() {
     seed_file(&service, "dup.bin", "repo-a", "hf", &vec![1, 2, 3]).await;
     seed_file(&service, "dup.bin", "repo-a", "hf", &vec![4, 5, 6]).await;
 
-    let downloaded = service.download("dup.bin", "hf").await.unwrap();
+    let file = service.info("dup.bin", "hf").await.unwrap().unwrap();
+    let downloaded = read_seeded_file(&service, &file).await;
     assert_eq!(downloaded, vec![4, 5, 6]);
 }
 

@@ -758,11 +758,12 @@ async fn file_proxy_inner(
                 if !stale {
                     tracing::debug!("GET cache hit (streaming): {}", cache_name);
                     let (file, content_length, stream) = service
-                        .stream_cached_file(
-                            &cache_name,
-                            source,
+                        .stream_http_file(
+                            &url,
+                            &file,
                             range.map(|r| r.0),
                             range.and_then(|r| r.1),
+                            user_agent.as_deref(),
                         )
                         .await?;
                     tracing::info!(
