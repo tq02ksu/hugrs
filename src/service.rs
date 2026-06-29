@@ -280,7 +280,29 @@ impl CacheService {
             self.fetched_bytes
                 .fetch_add(data.len() as u64, Ordering::Relaxed);
             self.metadata.delete_file(name, source)?;
-            self.upload(name, repo, source, data.to_vec()).await?;
+            let file = self
+                .metadata
+                .add_file(name, repo, total_size as i64, source)?;
+            let chunks = crate::chunker::chunk_with_hashes(&data, CHUNK_SIZE);
+            for chunk in &chunks {
+                if !self.backend.exists(&chunk.sha256).await? {
+                    self.backend.put(&chunk.sha256, &chunk.data).await?;
+                }
+                let path = self.chunk_path(&chunk.sha256);
+                self.metadata.ensure_chunk(
+                    &chunk.sha256,
+                    "local",
+                    &path,
+                    chunk.chunk_size as i64,
+                    chunk.chunk_size as i64,
+                )?;
+                self.metadata.link_file_chunk(
+                    file.id,
+                    &chunk.sha256,
+                    chunk.chunk_index as i64,
+                    chunk.chunk_size as i64,
+                )?;
+            }
             self.metadata.set_file_headers(
                 name,
                 source,
