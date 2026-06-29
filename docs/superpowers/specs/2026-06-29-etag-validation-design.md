@@ -75,7 +75,26 @@ self.metadata.set_file_headers(
 
 Alternative: refactor `download_from_url()` to reuse `stream_from_upstream()` internally (same logic, different return type). Evaluated but adds complexity — the admin download path doesn't need streaming.
 
-### 2. Delete upload()
+### 2. Startup Backfill for Existing NULL Records (TRANSITIONAL)
+
+Even after fixing the root cause, existing DB rows may still have NULL `etag`/`content_type`. Add a one-time startup backfill that fills in these values from upstream. Marked with `// TRANSITIONAL: remove in v0.X.0` comments — delete entire block in future version.
+
+```
+// TRANSITIONAL: remove in v0.X.0 ──────────────────────────
+for each row in files WHERE etag IS NULL OR content_type IS NULL:
+    if x_repo_commit IS NULL → skip (can't construct URL)
+    reconstruct upstream URL from (name, repo, x_repo_commit, source)
+    send HEAD (or GET for MS repo API) to upstream
+    if response has etag or content_type → UPDATE DB
+    if network error → skip, warn log
+// TRANSITIONAL: end ───────────────────────────────────────
+```
+
+- `metadata.rs`: `list_files_with_missing_headers()`
+- `service.rs`: `backfill_missing_headers()` — entire method body wrapped in TRANSITIONAL markers
+- `main.rs`: `backfill_missing_headers().await` call — wrapped in TRANSITIONAL markers
+
+### 3. Delete `upload()`
 
 - Remove `service.rs::upload()` (lines 134-194)
 - Remove `src/service.rs:283` call site (replaced by fix above)
@@ -83,7 +102,7 @@ Alternative: refactor `download_from_url()` to reuse `stream_from_upstream()` in
 - Update all test files that call `.upload()` to use a test helper that goes through `download_from_url()` or directly calls metadata + backend
 - No admin API endpoint uses `upload()` — no API changes needed
 
-### 3. ETag Validation on Every Request
+### 4. ETag Validation on Every Request
 
 Modify `file_proxy_inner()` GET cache-hit path:
 
@@ -112,7 +131,7 @@ Also apply to HEAD cache-hit path: validate ETag before returning cached HEAD re
 
 **Concurrency:** Use a per-file validation lock in `CacheService` to coalesce concurrent validations for the same file.
 
-### 4. If-None-Match Support
+### 5. If-None-Match Support
 
 When client sends `If-None-Match` header on GET:
 
@@ -131,7 +150,7 @@ Standard RFC 7232 semantics:
 - 304 response includes: `ETag`, `Content-Length` (original total_size), `Accept-Ranges`, `X-Repo-Commit`
 - Multiple etags in `If-None-Match` (comma-separated): match if any one matches
 
-### 5. Affected Files
+### 6. Affected Files
 
 | File | Changes |
 |------|---------|
@@ -145,7 +164,7 @@ Standard RFC 7232 semantics:
 | `tests/e2e_tests.rs` | Replace `.upload()` calls; add 304 tests |
 | `tests/streaming_tests.rs` | No changes needed (uses mock upstream with ETag) |
 
-### 6. Configuration
+### 7. Configuration
 
 ```toml
 [cache]
