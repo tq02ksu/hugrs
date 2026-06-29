@@ -52,6 +52,7 @@ pub struct CacheService {
     prefetch_depth: usize,
     prefetch_budget_base: usize,
     verify_sha256: bool,
+    etag_validation_timeout: u64,
     fetched_bytes: Arc<AtomicU64>,
     served_bytes: Arc<AtomicU64>,
     fs_manager: Arc<crate::session::FileSessionManager>,
@@ -69,6 +70,7 @@ impl CacheService {
         prefetch_budget_base: usize,
         verify_sha256: bool,
         stream_client: reqwest::Client,
+        etag_validation_timeout: u64,
     ) -> Self {
         let fetched_bytes = Arc::new(AtomicU64::new(0));
         let served_bytes = Arc::new(AtomicU64::new(0));
@@ -125,6 +127,7 @@ impl CacheService {
             prefetch_depth,
             prefetch_budget_base,
             verify_sha256,
+            etag_validation_timeout,
             fetched_bytes,
             served_bytes,
             fs_manager,
@@ -992,6 +995,28 @@ impl CacheService {
             x_linked_size,
             x_linked_etag,
         ))
+    }
+
+    pub async fn validate_file_etag(
+        &self,
+        url: &str,
+        name: &str,
+        repo: &str,
+        source: &str,
+        user_agent: Option<&str>,
+        cached_etag: &str,
+    ) -> anyhow::Result<bool> {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(self.etag_validation_timeout),
+            self.fetch_file_metadata(url, name, repo, source, user_agent),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("etag validation timed out"))?;
+        let (_size, upstream_etag, _ct, _commit, _xl_size, _xl_etag) = result?;
+        match upstream_etag {
+            Some(ref ue) => Ok(ue == cached_etag),
+            None => Ok(true),
+        }
     }
 
     async fn stream_small_file(

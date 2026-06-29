@@ -121,6 +121,7 @@ async fn test_multiple_gets_no_duplicate_downloads() {
         8,
         true,
         reqwest::Client::new(),
+    5,
     ));
 
     let upstream_url = format!("http://{}/test/repo/resolve/main/test.bin", addr);
@@ -242,6 +243,7 @@ async fn test_partial_cache_no_redundant_download() {
         8,
         true,
         reqwest::Client::new(),
+        5,
     );
 
     let upstream_url = format!("http://{}/test/repo/resolve/main/part.bin", addr);
@@ -362,6 +364,7 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
         8,
         true,
         reqwest::Client::new(),
+    5,
     ));
 
     let upstream_url = format!("http://{}/test/repo/resolve/main/test.bin", addr);

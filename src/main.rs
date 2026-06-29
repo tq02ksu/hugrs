@@ -87,6 +87,7 @@ fn main() -> anyhow::Result<()> {
             config.storage.prefetch_budget_base,
             config.storage.verify_sha256,
             stream_client,
+            config.storage.etag_validation_timeout_secs,
         );
 
         server::run(config, service, ms_http_client, ms_head_client).await?;

@@ -84,6 +84,9 @@ pub struct DaemonCli {
 
     #[arg(long = "enable-sha256-verify")]
     pub enable_sha256_verify: Option<bool>,
+
+    #[arg(long)]
+    pub etag_validation_timeout_secs: Option<u64>,
 }
 
 impl DaemonCli {
@@ -116,6 +119,7 @@ impl DaemonCli {
             prefetch_depth: self.prefetch_depth,
             prefetch_budget_base: self.prefetch_budget_base,
             enable_sha256_verify: self.enable_sha256_verify,
+            etag_validation_timeout_secs: self.etag_validation_timeout_secs,
         }
     }
 }

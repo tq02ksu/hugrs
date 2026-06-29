@@ -64,6 +64,7 @@ async fn test_upload_and_download() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     let data = b"hello hugrs cache service";
@@ -100,6 +101,7 @@ async fn test_delete_and_gc() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3]).await;
@@ -131,6 +133,7 @@ async fn test_stats() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     let stats = service.stats().await.unwrap();
@@ -167,6 +170,7 @@ async fn test_upload_duplicate_file_overwrites() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "dup.bin", "repo-a", "hf", &vec![1, 2, 3]).await;
@@ -195,6 +199,7 @@ async fn test_lru_eviction() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "big.bin", "repo-big", "hf", &vec![0u8; 250]).await;
@@ -225,6 +230,7 @@ async fn test_lru_eviction_by_repo() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "a.txt", "repo-a", "hf", &vec![1u8; 100]).await;
@@ -256,6 +262,7 @@ async fn test_upload_preserves_headers() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     service
@@ -321,6 +328,7 @@ async fn test_delete_marks_zero_ref_chunks_orphaned() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -356,6 +364,7 @@ async fn test_delete_does_not_remove_backend_data_immediately() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -390,6 +399,7 @@ async fn test_delete_without_source_removes_all_sources() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -424,6 +434,7 @@ async fn test_gc_dry_run_reports_orphan_candidates() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -456,6 +467,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         8,
         true,
         reqwest::Client::new(),
+        5
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;

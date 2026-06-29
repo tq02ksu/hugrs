@@ -54,6 +54,9 @@ pub struct StorageConfig {
 
     #[serde(default = "default_verify_sha256")]
     pub verify_sha256: bool,
+
+    #[serde(default = "default_etag_validation_timeout")]
+    pub etag_validation_timeout_secs: u64,
 }
 
 fn default_prefetch_depth() -> usize {
@@ -66,6 +69,10 @@ fn default_prefetch_budget_base() -> usize {
 
 fn default_verify_sha256() -> bool {
     true
+}
+
+fn default_etag_validation_timeout() -> u64 {
+    5
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +197,7 @@ impl Default for StorageConfig {
             prefetch_depth: default_prefetch_depth(),
             prefetch_budget_base: default_prefetch_budget_base(),
             verify_sha256: default_verify_sha256(),
+            etag_validation_timeout_secs: default_etag_validation_timeout(),
         }
     }
 }
@@ -273,6 +281,7 @@ pub struct CliOverrides {
     pub prefetch_depth: Option<usize>,
     pub prefetch_budget_base: Option<usize>,
     pub enable_sha256_verify: Option<bool>,
+    pub etag_validation_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -315,6 +324,8 @@ struct StoragePatch {
     prefetch_budget_base: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     verify_sha256: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag_validation_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -466,6 +477,7 @@ fn cli_patch(overrides: CliOverrides) -> anyhow::Result<ConfigPatch> {
         overrides.prefetch_depth.is_some(),
         overrides.prefetch_budget_base.is_some(),
         overrides.enable_sha256_verify.is_some(),
+        overrides.etag_validation_timeout_secs.is_some(),
     ]) {
         patch.storage = Some(StoragePatch {
             backend: overrides.storage_backend,
@@ -482,6 +494,7 @@ fn cli_patch(overrides: CliOverrides) -> anyhow::Result<ConfigPatch> {
             prefetch_depth: overrides.prefetch_depth,
             prefetch_budget_base: overrides.prefetch_budget_base,
             verify_sha256: overrides.enable_sha256_verify,
+            etag_validation_timeout_secs: overrides.etag_validation_timeout_secs,
         });
     }
 
@@ -561,6 +574,7 @@ fn env_patch() -> anyhow::Result<ConfigPatch> {
         prefetch_depth: env_parsed("HUGRS_PREFETCH_DEPTH")?,
         prefetch_budget_base: env_parsed("HUGRS_PREFETCH_BUDGET_BASE")?,
         verify_sha256: env_parsed("HUGRS_VERIFY_SHA256")?,
+        etag_validation_timeout_secs: env_parsed("HUGRS_ETAG_VALIDATION_TIMEOUT")?,
     };
     if !storage_is_empty(&storage) {
         patch.storage = Some(storage);

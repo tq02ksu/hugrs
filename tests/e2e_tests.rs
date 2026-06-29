@@ -277,6 +277,7 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         8,
         true,
         reqwest::Client::new(),
+    5,
     )
 }
 
@@ -306,6 +307,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
             prefetch_depth: 4,
             prefetch_budget_base: 8,
             verify_sha256: true,
+            etag_validation_timeout_secs: 5,
         },
         database: hugrs::config::DatabaseConfig {
             path: dir.path().join("http_db"),
@@ -609,12 +611,12 @@ async fn test_ms_repo_second_get_uses_cache() {
     assert_eq!(body2.as_ref(), test_data.as_slice());
 
     assert_eq!(
-        first_repo_gets,
+        first_repo_gets + 1, // +1 for etag validation GET
         state.ms_repo_get_count.load(Ordering::SeqCst)
     );
     assert_eq!(
         first_cdn_gets,
-        state.ms_cdn_get_count.load(Ordering::SeqCst)
+        state.ms_cdn_get_count.load(Ordering::SeqCst) // CDN called with HEAD, count unchanged
     );
 }
 

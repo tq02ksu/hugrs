@@ -595,6 +595,68 @@ async fn file_proxy_inner(
 
     // GET
     let get_start = std::time::Instant::now();
+
+    // Check cache and extract cached etag for validation
+    let cached_etag = {
+        let service = state.service.lock().await;
+        if service
+            .is_file_complete(&cache_name, source)
+            .await
+            .unwrap_or(false)
+        {
+            if let Ok(Some(file)) = service.info(&cache_name, source).await {
+                let stale = range.map(|r| r.0).unwrap_or(0) >= file.total_size as u64;
+                if !stale {
+                    file.etag.clone()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    // Validate etag with upstream if we have a cached etag
+    if let Some(ref etag) = cached_etag {
+        let result = {
+            let service = state.service.lock().await;
+            service
+                .validate_file_etag(
+                    &url,
+                    &cache_name,
+                    &repo_id,
+                    source,
+                    user_agent.as_deref(),
+                    etag,
+                )
+                .await
+        };
+
+        match result {
+            Ok(true) => {
+                tracing::debug!("GET etag validated: {}", cache_name);
+            }
+            Ok(false) => {
+                tracing::info!("GET etag changed, invalidating: {}", cache_name);
+                let service = state.service.lock().await;
+                let _ = service.metadata.delete_file(&cache_name, source);
+                drop(service);
+                // Fall through to stream_from_upstream
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "GET etag validation failed ({}), serving degraded: {}",
+                    e,
+                    cache_name
+                );
+            }
+        }
+    }
+
+    // Serve from cache if still complete
     {
         let service = state.service.lock().await;
         if service
@@ -602,32 +664,30 @@ async fn file_proxy_inner(
             .await
             .unwrap_or(false)
         {
-            let file_opt = service.info(&cache_name, source).await.ok().flatten();
-            let stale = file_opt
-                .as_ref()
-                .map(|f| range.map(|r| r.0).unwrap_or(0) >= f.total_size as u64)
-                .unwrap_or(false);
-            if !stale {
-                tracing::debug!("GET cache hit (streaming): {}", cache_name);
-                let (file, content_length, stream) = service
-                    .stream_cached_file(
-                        &cache_name,
-                        source,
-                        range.map(|r| r.0),
-                        range.and_then(|r| r.1),
-                    )
-                    .await?;
-                tracing::info!(
-                    "{}: cache hit, stream ready in {}ms",
-                    cache_name,
-                    get_start.elapsed().as_millis()
+            if let Ok(Some(file)) = service.info(&cache_name, source).await {
+                let stale = range.map(|r| r.0).unwrap_or(0) >= file.total_size as u64;
+                if !stale {
+                    tracing::debug!("GET cache hit (streaming): {}", cache_name);
+                    let (file, content_length, stream) = service
+                        .stream_cached_file(
+                            &cache_name,
+                            source,
+                            range.map(|r| r.0),
+                            range.and_then(|r| r.1),
+                        )
+                        .await?;
+                    tracing::info!(
+                        "{}: cache hit, stream ready in {}ms",
+                        cache_name,
+                        get_start.elapsed().as_millis()
+                    );
+                    return build_stream_response(file, content_length, stream, &path, range);
+                }
+                tracing::debug!(
+                    "GET cache stale (range beyond cached size), refreshing from upstream: {}",
+                    cache_name
                 );
-                return build_stream_response(file, content_length, stream, &path, range);
             }
-            tracing::debug!(
-                "GET cache stale (range beyond cached size), refreshing from upstream: {}",
-                cache_name
-            );
         }
     }
 
