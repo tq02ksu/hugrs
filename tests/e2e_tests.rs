@@ -16,38 +16,47 @@ use tempfile::TempDir;
 
 use hugrs::service::CHUNK_SIZE;
 
-async fn seed_file(
-    svc: &CacheService,
-    name: &str,
-    repo: &str,
-    source: &str,
-    data: &[u8],
-) {
+async fn seed_file(svc: &CacheService, name: &str, repo: &str, source: &str, data: &[u8]) {
     let existing = svc.metadata.get_file_by_name(name, source).unwrap();
     svc.metadata.delete_file(name, source).ok();
-    let file = svc.metadata.add_file(name, repo, data.len() as i64, source).unwrap();
+    let file = svc
+        .metadata
+        .add_file(name, repo, data.len() as i64, source)
+        .unwrap();
     if let Some(ref h) = existing {
-        svc.metadata.set_file_headers(
-            name, source,
-            h.etag.as_deref(),
-            h.x_repo_commit.as_deref(),
-            h.x_linked_size,
-            h.x_linked_etag.as_deref(),
-            h.content_type.as_deref(),
-        ).unwrap();
+        svc.metadata
+            .set_file_headers(
+                name,
+                source,
+                h.etag.as_deref(),
+                h.x_repo_commit.as_deref(),
+                h.x_linked_size,
+                h.x_linked_etag.as_deref(),
+                h.content_type.as_deref(),
+            )
+            .unwrap();
     }
     let chunks = hugrs::chunker::chunk_with_hashes(data, CHUNK_SIZE);
     for chunk in &chunks {
         svc.backend.put(&chunk.sha256, &chunk.data).await.unwrap();
         let path = svc.chunk_path(&chunk.sha256);
-        svc.metadata.ensure_chunk(
-            &chunk.sha256, "local", &path,
-            chunk.chunk_size as i64, chunk.chunk_size as i64,
-        ).unwrap();
-        svc.metadata.link_file_chunk(
-            file.id, &chunk.sha256,
-            chunk.chunk_index as i64, chunk.chunk_size as i64,
-        ).unwrap();
+        svc.metadata
+            .ensure_chunk(
+                &chunk.sha256,
+                "local",
+                &path,
+                chunk.chunk_size as i64,
+                chunk.chunk_size as i64,
+            )
+            .unwrap();
+        svc.metadata
+            .link_file_chunk(
+                file.id,
+                &chunk.sha256,
+                chunk.chunk_index as i64,
+                chunk.chunk_size as i64,
+            )
+            .unwrap();
     }
     svc.metadata.touch_repo(repo).unwrap();
     if let Some(limit) = svc.max_size {
@@ -277,7 +286,7 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         8,
         true,
         reqwest::Client::new(),
-    5,
+        5,
     )
 }
 
@@ -946,8 +955,22 @@ async fn test_control_api_file_delete_without_source_applies_to_all_sources() {
     let dir = TempDir::new().unwrap();
 
     let seed_service = make_service(&dir, "http_db");
-    seed_file(&seed_service, "shared.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
-    seed_file(&seed_service, "shared.bin", "repo-a", "ms", &vec![1, 2, 3, 4]).await;
+    seed_file(
+        &seed_service,
+        "shared.bin",
+        "repo-a",
+        "hf",
+        &vec![1, 2, 3, 4],
+    )
+    .await;
+    seed_file(
+        &seed_service,
+        "shared.bin",
+        "repo-a",
+        "ms",
+        &vec![1, 2, 3, 4],
+    )
+    .await;
 
     let app = build_hugrs_router(&upstream, &dir);
 

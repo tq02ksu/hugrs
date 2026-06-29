@@ -136,7 +136,7 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         8,
         true,
         reqwest::Client::new(),
-    5,
+        5,
     )
 }
 

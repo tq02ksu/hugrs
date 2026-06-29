@@ -1066,13 +1066,17 @@ impl CacheService {
             for chunk in &chunks {
                 if !svc.backend.exists(&chunk.sha256).await.unwrap_or(false) {
                     if let Err(e) = svc.backend.put(&chunk.sha256, &chunk.data).await {
-                        let _ = tx.send(Err(anyhow::anyhow!("chunk store error: {}", e))).await;
+                        let _ = tx
+                            .send(Err(anyhow::anyhow!("chunk store error: {}", e)))
+                            .await;
                         return;
                     }
                 }
                 let path = svc.chunk_path(&chunk.sha256);
                 if let Err(e) = svc.metadata.ensure_chunk(
-                    &chunk.sha256, "local", &path,
+                    &chunk.sha256,
+                    "local",
+                    &path,
                     chunk.chunk_size as i64,
                     chunk.chunk_size as i64,
                 ) {
@@ -1095,7 +1099,7 @@ impl CacheService {
         });
 
         Ok((file.clone(), total_size, ReceiverStream::new(rx)))
-        }
+    }
 
     // TRANSITIONAL: remove in v0.X.0 ──────────────────────────
     pub async fn backfill_missing_headers(

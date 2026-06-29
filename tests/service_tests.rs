@@ -6,38 +6,47 @@ use hugrs::storage::Compression;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-async fn seed_file(
-    svc: &CacheService,
-    name: &str,
-    repo: &str,
-    source: &str,
-    data: &[u8],
-) {
+async fn seed_file(svc: &CacheService, name: &str, repo: &str, source: &str, data: &[u8]) {
     let existing = svc.metadata.get_file_by_name(name, source).unwrap();
     svc.metadata.delete_file(name, source).ok();
-    let file = svc.metadata.add_file(name, repo, data.len() as i64, source).unwrap();
+    let file = svc
+        .metadata
+        .add_file(name, repo, data.len() as i64, source)
+        .unwrap();
     if let Some(ref h) = existing {
-        svc.metadata.set_file_headers(
-            name, source,
-            h.etag.as_deref(),
-            h.x_repo_commit.as_deref(),
-            h.x_linked_size,
-            h.x_linked_etag.as_deref(),
-            h.content_type.as_deref(),
-        ).unwrap();
+        svc.metadata
+            .set_file_headers(
+                name,
+                source,
+                h.etag.as_deref(),
+                h.x_repo_commit.as_deref(),
+                h.x_linked_size,
+                h.x_linked_etag.as_deref(),
+                h.content_type.as_deref(),
+            )
+            .unwrap();
     }
     let chunks = hugrs::chunker::chunk_with_hashes(data, CHUNK_SIZE);
     for chunk in &chunks {
         svc.backend.put(&chunk.sha256, &chunk.data).await.unwrap();
         let path = svc.chunk_path(&chunk.sha256);
-        svc.metadata.ensure_chunk(
-            &chunk.sha256, "local", &path,
-            chunk.chunk_size as i64, chunk.chunk_size as i64,
-        ).unwrap();
-        svc.metadata.link_file_chunk(
-            file.id, &chunk.sha256,
-            chunk.chunk_index as i64, chunk.chunk_size as i64,
-        ).unwrap();
+        svc.metadata
+            .ensure_chunk(
+                &chunk.sha256,
+                "local",
+                &path,
+                chunk.chunk_size as i64,
+                chunk.chunk_size as i64,
+            )
+            .unwrap();
+        svc.metadata
+            .link_file_chunk(
+                file.id,
+                &chunk.sha256,
+                chunk.chunk_index as i64,
+                chunk.chunk_size as i64,
+            )
+            .unwrap();
     }
     svc.metadata.touch_repo(repo).unwrap();
     if let Some(limit) = svc.max_size {
@@ -64,7 +73,7 @@ async fn test_upload_and_download() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     let data = b"hello hugrs cache service";
@@ -101,7 +110,7 @@ async fn test_delete_and_gc() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3]).await;
@@ -133,7 +142,7 @@ async fn test_stats() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     let stats = service.stats().await.unwrap();
@@ -170,7 +179,7 @@ async fn test_upload_duplicate_file_overwrites() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "dup.bin", "repo-a", "hf", &vec![1, 2, 3]).await;
@@ -199,7 +208,7 @@ async fn test_lru_eviction() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "big.bin", "repo-big", "hf", &vec![0u8; 250]).await;
@@ -230,7 +239,7 @@ async fn test_lru_eviction_by_repo() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "a.txt", "repo-a", "hf", &vec![1u8; 100]).await;
@@ -262,7 +271,7 @@ async fn test_upload_preserves_headers() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     service
@@ -328,7 +337,7 @@ async fn test_delete_marks_zero_ref_chunks_orphaned() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -364,7 +373,7 @@ async fn test_delete_does_not_remove_backend_data_immediately() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -399,7 +408,7 @@ async fn test_delete_without_source_removes_all_sources() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -434,7 +443,7 @@ async fn test_gc_dry_run_reports_orphan_candidates() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
@@ -467,7 +476,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         8,
         true,
         reqwest::Client::new(),
-        5
+        5,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;

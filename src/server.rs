@@ -429,7 +429,7 @@ pub async fn ms_repo_file_proxy(
     .await
 }
 
-fn etag_matches_any(cached_etag: &str, if_none_match: &str) -> bool {
+pub fn etag_matches_any(cached_etag: &str, if_none_match: &str) -> bool {
     let cached_stripped = cached_etag.trim_start_matches("W/").trim_matches('"');
     if_none_match
         .split(',')
@@ -481,7 +481,7 @@ async fn file_proxy_inner(
         .map(|s| s.to_string());
 
     if method == Method::HEAD {
-        let mut proceed_to_upstream = true;
+        let proceed_to_upstream;
         {
             let service = state.service.lock().await;
             if let Ok(Some(file)) = service.info(&cache_name, source).await {
@@ -494,15 +494,23 @@ async fn file_proxy_inner(
                             .lock()
                             .await
                             .validate_file_etag(
-                                &url, &cache_name, &repo_id, source,
-                                user_agent.as_deref(), &cached_etag,
+                                &url,
+                                &cache_name,
+                                &repo_id,
+                                source,
+                                user_agent.as_deref(),
+                                &cached_etag,
                             )
                             .await
                         {
                             Ok(true) => true,
                             Ok(false) => false,
                             Err(e) => {
-                                tracing::warn!("HEAD etag validation failed ({}), serving degraded: {}", e, cache_name);
+                                tracing::warn!(
+                                    "HEAD etag validation failed ({}), serving degraded: {}",
+                                    e,
+                                    cache_name
+                                );
                                 true
                             }
                         }
@@ -523,7 +531,10 @@ async fn file_proxy_inner(
                     }
                     proceed_to_upstream = false;
                 } else {
-                    tracing::debug!("HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}", cache_name);
+                    tracing::debug!(
+                        "HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}",
+                        cache_name
+                    );
                     proceed_to_upstream = true;
                 }
             } else {
@@ -533,130 +544,130 @@ async fn file_proxy_inner(
 
         if proceed_to_upstream {
             tracing::info!("HEAD proxy to upstream: {}", url);
-        let mut req = if first_hop_get {
-            head_client.get(&url)
-        } else {
-            head_client.head(&url)
-        };
-        if let Some(ref ua) = user_agent {
-            req = req.header("User-Agent", ua);
-        }
-        let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
-        let status = resp.status();
-        let first_headers = resp.headers();
-
-        tracing::info!("HEAD upstream response: status={}", status);
-
-        let x_repo_commit = first_headers
-            .get("x-repo-commit")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-        let xl_size: Option<i64> = first_headers
-            .get("x-linked-size")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
-        let x_linked_etag = first_headers
-            .get("x-linked-etag")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        let (total_size, etag, content_type) = if status.is_redirection() {
-            let location = first_headers
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let location = resolve_redirect(&url, location);
-            tracing::info!("HEAD following redirect: {}", location);
-            let mut req2 = http_client.head(location);
+            let mut req = if first_hop_get {
+                head_client.get(&url)
+            } else {
+                head_client.head(&url)
+            };
             if let Some(ref ua) = user_agent {
-                req2 = req2.header("User-Agent", ua);
+                req = req.header("User-Agent", ua);
             }
-            match req2.send().await {
-                Ok(resp2) => {
-                    let h = resp2.headers();
-                    let cl: u64 = h
-                        .get("content-length")
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(0);
-                    let et = h
-                        .get("etag")
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_string());
-                    let ct = h
-                        .get("content-type")
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_string());
-                    (cl, et, ct)
-                }
-                Err(e) => {
-                    tracing::warn!("HEAD redirect failed: {}", e);
-                    (0u64, None, None)
-                }
-            }
-        } else {
-            let cl: u64 = first_headers
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0);
-            let et = first_headers
-                .get("etag")
+            let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
+            let status = resp.status();
+            let first_headers = resp.headers();
+
+            tracing::info!("HEAD upstream response: status={}", status);
+
+            let x_repo_commit = first_headers
+                .get("x-repo-commit")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
-            let ct = first_headers
-                .get("content-type")
+            let xl_size: Option<i64> = first_headers
+                .get("x-linked-size")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse().ok());
+            let x_linked_etag = first_headers
+                .get("x-linked-etag")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
-            (cl, et, ct)
-        };
 
-        let size = if total_size > 0 {
-            total_size
-        } else {
-            xl_size.unwrap_or(0) as u64
-        };
+            let (total_size, etag, content_type) = if status.is_redirection() {
+                let location = first_headers
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                let location = resolve_redirect(&url, location);
+                tracing::info!("HEAD following redirect: {}", location);
+                let mut req2 = http_client.head(location);
+                if let Some(ref ua) = user_agent {
+                    req2 = req2.header("User-Agent", ua);
+                }
+                match req2.send().await {
+                    Ok(resp2) => {
+                        let h = resp2.headers();
+                        let cl: u64 = h
+                            .get("content-length")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0);
+                        let et = h
+                            .get("etag")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        let ct = h
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        (cl, et, ct)
+                    }
+                    Err(e) => {
+                        tracing::warn!("HEAD redirect failed: {}", e);
+                        (0u64, None, None)
+                    }
+                }
+            } else {
+                let cl: u64 = first_headers
+                    .get("content-length")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                let et = first_headers
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let ct = first_headers
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                (cl, et, ct)
+            };
 
-        if size > 0 {
-            let service = state.service.lock().await;
-            let _ = service.ensure_file_headers(
-                &cache_name,
-                &repo_id,
-                source,
-                size,
-                etag.as_deref(),
-                x_repo_commit.as_deref(),
-                xl_size,
-                x_linked_etag.as_deref(),
-                content_type.as_deref(),
-            );
-            tracing::info!("cached HEAD metadata for {} ({} bytes)", cache_name, size);
-        }
+            let size = if total_size > 0 {
+                total_size
+            } else {
+                xl_size.unwrap_or(0) as u64
+            };
 
-        let mut builder = Response::builder().status(StatusCode::OK);
-        if let Some(ref ct) = content_type {
-            builder = builder.header("Content-Type", ct.as_str());
-        }
-        if size > 0 {
-            builder = builder.header("Content-Length", size);
-        }
-        builder = builder.header("Accept-Ranges", "bytes");
-        if let Some(ref et) = etag {
-            builder = builder.header("ETag", et.as_str());
-        }
-        if let Some(ref commit) = x_repo_commit {
-            builder = builder.header("X-Repo-Commit", commit.as_str());
-        }
-        if let Some(sz) = xl_size {
-            builder = builder.header("X-Linked-Size", sz);
-        }
-        if let Some(ref le) = x_linked_etag {
-            builder = builder.header("X-Linked-ETag", le.as_str());
-        }
-        tracing::info!("HEAD returning 200 (size={})", size);
-        return builder
-            .body(axum::body::Body::empty())
-            .map_err(|e| AppError::Anyhow(e.into()));
+            if size > 0 {
+                let service = state.service.lock().await;
+                let _ = service.ensure_file_headers(
+                    &cache_name,
+                    &repo_id,
+                    source,
+                    size,
+                    etag.as_deref(),
+                    x_repo_commit.as_deref(),
+                    xl_size,
+                    x_linked_etag.as_deref(),
+                    content_type.as_deref(),
+                );
+                tracing::info!("cached HEAD metadata for {} ({} bytes)", cache_name, size);
+            }
+
+            let mut builder = Response::builder().status(StatusCode::OK);
+            if let Some(ref ct) = content_type {
+                builder = builder.header("Content-Type", ct.as_str());
+            }
+            if size > 0 {
+                builder = builder.header("Content-Length", size);
+            }
+            builder = builder.header("Accept-Ranges", "bytes");
+            if let Some(ref et) = etag {
+                builder = builder.header("ETag", et.as_str());
+            }
+            if let Some(ref commit) = x_repo_commit {
+                builder = builder.header("X-Repo-Commit", commit.as_str());
+            }
+            if let Some(sz) = xl_size {
+                builder = builder.header("X-Linked-Size", sz);
+            }
+            if let Some(ref le) = x_linked_etag {
+                builder = builder.header("X-Linked-ETag", le.as_str());
+            }
+            tracing::info!("HEAD returning 200 (size={})", size);
+            return builder
+                .body(axum::body::Body::empty())
+                .map_err(|e| AppError::Anyhow(e.into()));
         } // end if proceed_to_upstream
     }
 
