@@ -81,6 +81,16 @@ cargo build --release
   - `figment` merges defaults, config file values, environment variables, and CLI overrides into `Config`.
   Keep this separation explicit in code and docs. Do not describe `clap` or `dotenvy` as config merge solutions.
 
+## Commit Checklist
+
+- Before creating any commit, run the relevant verification commands for the change and confirm they pass.
+- For Rust code changes, the default pre-commit quality gates are:
+  - `cargo fmt -- --check`
+  - `cargo clippy -- -D warnings`
+  - `cargo test`
+- During iteration, targeted tests are acceptable for faster feedback, but do not commit until the full required checks for the touched area have passed.
+- Do not commit code that is known to fail formatting, clippy, or tests.
+
 ## Release Checklist
 
 - Release tags use the `v*` pattern. Pushing a tag like `v0.4.0` triggers `.github/workflows/release.yml`.

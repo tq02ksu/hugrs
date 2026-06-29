@@ -315,7 +315,7 @@ impl ChunkReader {
             data.len()
         );
 
-        Ok(Bytes::from(data))
+        Ok(data)
     }
 }
 
