@@ -1095,5 +1095,76 @@ impl CacheService {
         });
 
         Ok((file.clone(), total_size, ReceiverStream::new(rx)))
+        }
+
+    // TRANSITIONAL: remove in v0.X.0 ──────────────────────────
+    pub async fn backfill_missing_headers(
+        &self,
+        hf_endpoint: &str,
+        ms_endpoint: &str,
+    ) -> anyhow::Result<usize> {
+        let files = self.metadata.list_files_with_missing_headers()?;
+        if files.is_empty() {
+            return Ok(0);
+        }
+        tracing::info!("Backfilling {} files with missing headers", files.len());
+
+        let mut fixed = 0usize;
+        for file in &files {
+            let commit = match &file.x_repo_commit {
+                Some(c) => c,
+                None => {
+                    tracing::warn!("Skipping {} (no x_repo_commit)", file.name);
+                    continue;
+                }
+            };
+
+            let (repo, filepath) = split_repo_path(&file.name);
+
+            let endpoint = match file.source.as_str() {
+                "ms" => ms_endpoint,
+                _ => hf_endpoint,
+            };
+            let url = match file.source.as_str() {
+                "ms" => format!(
+                    "{}/api/v1/models/{}/repo?Revision={}&FilePath={}",
+                    endpoint, repo, commit, filepath
+                ),
+                _ => format!("{}/{}/resolve/{}/{}", endpoint, repo, commit, filepath),
+            };
+
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                self.fetch_file_metadata(&url, &file.name, &file.repo, &file.source, None),
+            )
+            .await
+            {
+                Ok(Ok(_)) => {
+                    tracing::info!("Backfilled headers for {}", file.name);
+                    fixed += 1;
+                }
+                Ok(Err(e)) => tracing::warn!("Backfill failed for {}: {}", file.name, e),
+                Err(_) => tracing::warn!("Backfill timed out for {}", file.name),
+            }
+        }
+        tracing::info!("Backfill complete: {}/{} files fixed", fixed, files.len());
+        Ok(fixed)
     }
+    // TRANSITIONAL: end ───────────────────────────────────────
 }
+
+// TRANSITIONAL: helper for backfill, remove in v0.X.0 ──────
+fn split_repo_path(file_name: &str) -> (&str, &str) {
+    let mut parts = file_name.splitn(3, '/');
+    let org = parts.next().unwrap_or("");
+    let repo = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("");
+    let repo_id = if rest.is_empty() {
+        file_name
+    } else {
+        let repo_len = org.len() + 1 + repo.len();
+        &file_name[..repo_len]
+    };
+    (repo_id, rest)
+}
+// TRANSITIONAL: end ─────────────────────────────────────────

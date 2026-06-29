@@ -499,4 +499,33 @@ impl MetadataStore {
             served_bytes: 0,
         })
     }
+
+    // TRANSITIONAL: remove in v0.X.0 ──────────────────────────
+    pub fn list_files_with_missing_headers(&self) -> anyhow::Result<Vec<File>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files WHERE etag IS NULL OR content_type IS NULL")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(File {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                repo: row.get(2)?,
+                total_size: row.get(3)?,
+                created_at: row.get(4)?,
+                last_accessed: row.get(5)?,
+                source: row.get(6)?,
+                etag: row.get(7)?,
+                x_repo_commit: row.get(8)?,
+                x_linked_size: row.get(9)?,
+                x_linked_etag: row.get(10)?,
+                content_type: row.get(11)?,
+            })
+        })?;
+        let mut files = Vec::new();
+        for row in rows {
+            files.push(row?);
+        }
+        Ok(files)
+    }
+    // TRANSITIONAL: end ───────────────────────────────────────
 }

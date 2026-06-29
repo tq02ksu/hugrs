@@ -90,6 +90,20 @@ fn main() -> anyhow::Result<()> {
             config.storage.etag_validation_timeout_secs,
         );
 
+        // TRANSITIONAL: remove in v0.X.0 ──────────────────────────
+        let backfill_svc = service.clone();
+        let hf_endpoint = config.huggingface.endpoint.clone();
+        let ms_endpoint = config.modelscope.endpoint.clone();
+        tokio::spawn(async move {
+            if let Err(e) = backfill_svc
+                .backfill_missing_headers(&hf_endpoint, &ms_endpoint)
+                .await
+            {
+                tracing::warn!("Header backfill failed: {}", e);
+            }
+        });
+        // TRANSITIONAL: end ───────────────────────────────────────
+
         server::run(config, service, ms_http_client, ms_head_client).await?;
         anyhow::Ok(())
     })
