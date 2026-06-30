@@ -115,7 +115,7 @@ impl CacheService {
         ));
 
         let fs_manager = Arc::new(crate::session::FileSessionManager::new(
-            session_table.clone(),
+            session_table,
             served_bytes.clone(),
         ));
 
@@ -156,7 +156,7 @@ impl CacheService {
         let x_repo_commit = first_headers
             .get("x-repo-commit")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let x_linked_size: Option<i64> = first_headers
             .get("x-linked-size")
             .and_then(|v| v.to_str().ok())
@@ -164,7 +164,7 @@ impl CacheService {
         let x_linked_etag = first_headers
             .get("x-linked-etag")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
 
         let (total_size, etag, content_type, downstream_url) = if status.is_redirection() {
             let location = first_headers
@@ -179,30 +179,30 @@ impl CacheService {
                 .get("content-length")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {url}"))?;
             let et = h
                 .get("etag")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             let ct = h
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             (cl, et, ct, location.to_string())
         } else {
             let cl: u64 = first_headers
                 .get("content-length")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {}", url))?;
+                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {url}"))?;
             let et = first_headers
                 .get("etag")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             let ct = first_headers
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             (cl, et, ct, url.to_string())
         };
 
@@ -320,7 +320,7 @@ impl CacheService {
 
             handles.push(tokio::spawn(async move {
                 let _permit = concurrency_sem.acquire().await;
-                let range_header = format!("bytes={}-{}", start, end);
+                let range_header = format!("bytes={start}-{end}");
                 let resp = client
                     .get(&downstream_url)
                     .header("Range", &range_header)
@@ -614,7 +614,7 @@ impl CacheService {
         let file = self
             .metadata
             .get_file_by_name(name, source)?
-            .ok_or_else(|| anyhow::anyhow!("file not found: {}", name))?;
+            .ok_or_else(|| anyhow::anyhow!("file not found: {name}"))?;
 
         let total_size = file.total_size as u64;
         let start = range_start.unwrap_or(0);
@@ -623,7 +623,7 @@ impl CacheService {
             .min(total_size.saturating_sub(1));
 
         if start > end || start >= total_size {
-            anyhow::bail!("invalid range: bytes={}-{}/{}", start, end, total_size);
+            anyhow::bail!("invalid range: bytes={start}-{end}/{total_size}");
         }
 
         let content_length = end - start + 1;
@@ -693,12 +693,18 @@ impl CacheService {
                         }
                     };
                     if verify_sha256 {
-                        let (raw2, actual) = tokio::task::spawn_blocking(move || {
+                        let (raw2, actual) = match tokio::task::spawn_blocking(move || {
                             let h = chunker::sha256_hex(&raw);
                             (raw, h)
                         })
                         .await
-                        .unwrap();
+                        {
+                            Ok(result) => result,
+                            Err(e) => {
+                                let _ = tx.send(Err(anyhow::anyhow!("sha256 panicked: {e}"))).await;
+                                return;
+                            }
+                        };
                         if actual != ft.sha256 {
                             tracing::error!(
                                 "checksum mismatch for chunk {}: expected {} got {}",
@@ -738,7 +744,7 @@ impl CacheService {
                                     (raw, h)
                                 })
                                 .await
-                                .map_err(|e| anyhow::anyhow!("sha256 panicked: {}", e))?;
+                                .map_err(|e| anyhow::anyhow!("sha256 panicked: {e}"))?;
                                 if actual != next_ft.sha256 {
                                     tracing::error!(
                                         "checksum mismatch for chunk {}: expected {} got {}",
@@ -874,7 +880,7 @@ impl CacheService {
         let x_repo_commit = first_headers
             .get("x-repo-commit")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let x_linked_size: Option<i64> = first_headers
             .get("x-linked-size")
             .and_then(|v| v.to_str().ok())
@@ -882,7 +888,7 @@ impl CacheService {
         let x_linked_etag = first_headers
             .get("x-linked-etag")
             .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
 
         let (upstream_size, etag, content_type) = if status.is_redirection() {
             let location = first_headers
@@ -906,14 +912,14 @@ impl CacheService {
                     let et = h
                         .get("etag")
                         .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_string());
+                        .map(ToString::to_string);
                     let ct = h
                         .get("content-type")
                         .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_string());
+                        .map(ToString::to_string);
                     (cl, et, ct)
                 }
-                Err(e) => anyhow::bail!("redirect follow failed for {}: {}", url, e),
+                Err(e) => anyhow::bail!("redirect follow failed for {url}: {e}"),
             }
         } else {
             let cl: u64 = first_headers
@@ -924,11 +930,11 @@ impl CacheService {
             let et = first_headers
                 .get("etag")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             let ct = first_headers
                 .get("content-type")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             (cl, et, ct)
         };
 
@@ -938,7 +944,7 @@ impl CacheService {
             x_linked_size.unwrap_or(0) as u64
         };
         if size == 0 {
-            anyhow::bail!("cannot determine file size for {}", url);
+            anyhow::bail!("cannot determine file size for {url}");
         }
 
         let existing = self.metadata.get_file_by_name(name, source)?;
@@ -1025,10 +1031,9 @@ impl CacheService {
             };
             let url = match file.source.as_str() {
                 "ms" => format!(
-                    "{}/api/v1/models/{}/repo?Revision={}&FilePath={}",
-                    endpoint, repo, commit, filepath
+                    "{endpoint}/api/v1/models/{repo}/repo?Revision={commit}&FilePath={filepath}"
                 ),
-                _ => format!("{}/{}/resolve/{}/{}", endpoint, repo, commit, filepath),
+                _ => format!("{endpoint}/{repo}/resolve/{commit}/{filepath}"),
             };
 
             match tokio::time::timeout(

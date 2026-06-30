@@ -7,6 +7,17 @@ license = "MIT"
 repository = "https://github.com/anomalyco/hugrs"
 readme = "README.md"
 
+[lints.clippy]
+await_holding_lock = "deny"
+expect_used = "deny"
+manual_ok_or = "deny"
+needless_question_mark = "deny"
+redundant_clone = "deny"
+redundant_closure_for_method_calls = "deny"
+uninlined_format_args = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["multipart"] }

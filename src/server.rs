@@ -266,16 +266,13 @@ async fn model_info_inner(
     revision: String,
 ) -> Result<Response, AppError> {
     let (endpoint, client, _head) = hub_config(&state, source);
-    let repo_id = format!("{}/{}", org, repo);
+    let repo_id = format!("{org}/{repo}");
     let api_prefix = if source == "ms" {
         "api/v1/models"
     } else {
         "api/models"
     };
-    let url = format!(
-        "{}/{}/{}/revision/{}",
-        endpoint, api_prefix, repo_id, revision
-    );
+    let url = format!("{endpoint}/{api_prefix}/{repo_id}/revision/{revision}");
 
     tracing::info!("model_info proxy to: {}", url);
     let mut req = client.get(&url);
@@ -284,7 +281,7 @@ async fn model_info_inner(
         _ => &state.config.huggingface.token,
     };
     if let Some(ref token) = token {
-        req = req.header("Authorization", format!("Bearer {}", token));
+        req = req.header("Authorization", format!("Bearer {token}"));
     }
     let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
     let status = resp.status();
@@ -322,7 +319,7 @@ pub async fn hf_model_api_suffix(
         org,
         repo,
         suffix,
-        uri.query().map(|s| s.to_string()),
+        uri.query().map(ToString::to_string),
     )
     .await
 }
@@ -338,7 +335,7 @@ async fn ms_model_api_suffix(
         org,
         repo,
         suffix,
-        uri.query().map(|s| s.to_string()),
+        uri.query().map(ToString::to_string),
     )
     .await
 }
@@ -352,13 +349,13 @@ async fn model_api_path_inner(
     query: Option<String>,
 ) -> Result<Response, AppError> {
     let (endpoint, _client, _head) = hub_config(&state, source);
-    let repo_id = format!("{}/{}", org, repo);
+    let repo_id = format!("{org}/{repo}");
     let api_prefix = if source == "ms" {
         "api/v1/models"
     } else {
         "api/models"
     };
-    let mut url = format!("{}/{}/{}/{}", endpoint, api_prefix, repo_id, suffix);
+    let mut url = format!("{endpoint}/{api_prefix}/{repo_id}/{suffix}");
     if let Some(query) = query {
         url.push('?');
         url.push_str(&query);
@@ -376,9 +373,9 @@ pub async fn hf_file_proxy(
     Path((org, repo, revision, path)): Path<(String, String, String, String)>,
 ) -> Result<Response, AppError> {
     let (endpoint, _, _) = hub_config(&state, "hf");
-    let repo_id = format!("{}/{}", org, repo);
-    let cache_name = format!("{}/{}", repo_id, path);
-    let url = format!("{}/{}/resolve/{}/{}", endpoint, repo_id, revision, path);
+    let repo_id = format!("{org}/{repo}");
+    let cache_name = format!("{repo_id}/{path}");
+    let url = format!("{endpoint}/{repo_id}/resolve/{revision}/{path}");
     let user_agent = forwarded_user_agent(&headers);
     file_proxy_inner(
         state, "hf", url, cache_name, method, headers, path, user_agent, false,
@@ -393,9 +390,9 @@ pub async fn ms_file_proxy(
     Path((org, repo, revision, path)): Path<(String, String, String, String)>,
 ) -> Result<Response, AppError> {
     let (endpoint, _, _) = hub_config(&state, "ms");
-    let repo_id = format!("{}/{}", org, repo);
-    let cache_name = format!("{}/{}", repo_id, path);
-    let url = format!("{}/{}/resolve/{}/{}", endpoint, repo_id, revision, path);
+    let repo_id = format!("{org}/{repo}");
+    let cache_name = format!("{repo_id}/{path}");
+    let url = format!("{endpoint}/{repo_id}/resolve/{revision}/{path}");
     let user_agent = forwarded_user_agent(&headers);
     file_proxy_inner(
         state, "ms", url, cache_name, method, headers, path, user_agent, false,
@@ -416,10 +413,9 @@ pub async fn ms_repo_file_proxy(
         .unwrap_or_else(|| "master".to_string());
     let file_path = params.get("FilePath").cloned().unwrap_or_default();
     let (endpoint, _, _) = hub_config(&state, "ms");
-    let cache_name = format!("{}/{}/{}", org, repo, file_path);
+    let cache_name = format!("{org}/{repo}/{file_path}");
     let url = format!(
-        "{}/api/v1/models/{}/{}/repo?Revision={}&FilePath={}",
-        endpoint, org, repo, revision, file_path
+        "{endpoint}/api/v1/models/{org}/{repo}/repo?Revision={revision}&FilePath={file_path}"
     );
 
     let user_agent = forwarded_user_agent(&headers);
@@ -478,7 +474,7 @@ async fn file_proxy_inner(
     let if_none_match = headers
         .get("if-none-match")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
+        .map(ToString::to_string);
 
     if method == Method::HEAD {
         let proceed_to_upstream;
@@ -561,7 +557,7 @@ async fn file_proxy_inner(
             let x_repo_commit = first_headers
                 .get("x-repo-commit")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
             let xl_size: Option<i64> = first_headers
                 .get("x-linked-size")
                 .and_then(|v| v.to_str().ok())
@@ -569,7 +565,7 @@ async fn file_proxy_inner(
             let x_linked_etag = first_headers
                 .get("x-linked-etag")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+                .map(ToString::to_string);
 
             let (total_size, etag, content_type) = if status.is_redirection() {
                 let location = first_headers
@@ -593,11 +589,11 @@ async fn file_proxy_inner(
                         let et = h
                             .get("etag")
                             .and_then(|v| v.to_str().ok())
-                            .map(|s| s.to_string());
+                            .map(ToString::to_string);
                         let ct = h
                             .get("content-type")
                             .and_then(|v| v.to_str().ok())
-                            .map(|s| s.to_string());
+                            .map(ToString::to_string);
                         (cl, et, ct)
                     }
                     Err(e) => {
@@ -614,11 +610,11 @@ async fn file_proxy_inner(
                 let et = first_headers
                     .get("etag")
                     .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+                    .map(ToString::to_string);
                 let ct = first_headers
                     .get("content-type")
                     .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string());
+                    .map(ToString::to_string);
                 (cl, et, ct)
             };
 
@@ -811,10 +807,7 @@ fn build_head_response(file: &crate::metadata::File, path: &str) -> Result<Respo
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path);
-    let disposition = format!(
-        "inline; filename*=UTF-8''{}; filename=\"{}\"",
-        filename, filename
-    );
+    let disposition = format!("inline; filename*=UTF-8''{filename}; filename=\"{filename}\"");
 
     let mut resp = Response::builder()
         .status(StatusCode::OK)
@@ -854,17 +847,17 @@ pub fn resolve_redirect(base_url: &str, location: &str) -> String {
         if let Some(pos) = base_url.find("://") {
             let scheme_end = base_url[pos + 3..].find('/').map(|p| pos + 3 + p);
             if let Some(host_end) = scheme_end {
-                return format!("{}{}", &base_url[..host_end], location);
+                return format!("{}{location}", &base_url[..host_end]);
             }
-            return format!("{}{}", base_url, location);
+            return format!("{base_url}{location}");
         }
-        return format!("{}{}", base_url, location);
+        return format!("{base_url}{location}");
     }
     let base_dir = match base_url.rfind('/') {
         Some(pos) if pos > base_url.find("://").map(|p| p + 3).unwrap_or(0) => &base_url[..pos],
         _ => base_url,
     };
-    format!("{}/{}", base_dir, location)
+    format!("{base_dir}/{location}")
 }
 
 fn parse_range(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
@@ -889,7 +882,7 @@ fn forwarded_user_agent(headers: &HeaderMap) -> Option<String> {
     headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
 }
 
 fn build_stream_response(
@@ -903,10 +896,7 @@ fn build_stream_response(
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(path);
-    let disposition = format!(
-        "inline; filename*=UTF-8''{}; filename=\"{}\"",
-        filename, filename
-    );
+    let disposition = format!("inline; filename*=UTF-8''{filename}; filename=\"{filename}\"");
 
     let body = axum::body::Body::from_stream(stream);
 
@@ -1160,7 +1150,7 @@ async fn control_repo_show(
         })
         .collect();
     if matched.is_empty() {
-        return Err(AppError::NotFound(format!("repo not found: {}", repo)));
+        return Err(AppError::NotFound(format!("repo not found: {repo}")));
     }
     let items = aggregate_files(&matched);
     let sources = matched
@@ -1282,7 +1272,7 @@ async fn proxy_json(state: &AppState, source: &str, url: &str) -> Result<Respons
         _ => &state.config.huggingface.token,
     };
     if let Some(ref token) = token {
-        req = req.header("Authorization", format!("Bearer {}", token));
+        req = req.header("Authorization", format!("Bearer {token}"));
     }
     let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
     let status = resp.status();
@@ -1311,7 +1301,7 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::Anyhow(e) => {
                 tracing::error!("{}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e))
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}"))
             }
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             AppError::NotFound(message) => (StatusCode::NOT_FOUND, message.clone()),

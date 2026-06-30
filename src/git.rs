@@ -44,20 +44,20 @@ fn rewrite_href(href: &str, proxy_base: &str, upstream_endpoint: &str, source: &
     if source == "ms" {
         for domain in &ms_domains {
             if let Some(rest) = href.strip_prefix(domain) {
-                return format!("{}/ms{}", proxy_base, rest);
+                return format!("{proxy_base}/ms{rest}");
             }
         }
         if let Some(rest) = href.strip_prefix(upstream_endpoint) {
-            return format!("{}/ms{}", proxy_base, rest);
+            return format!("{proxy_base}/ms{rest}");
         }
     } else {
         for domain in &hf_domains {
             if let Some(rest) = href.strip_prefix(domain) {
-                return format!("{}{}", proxy_base, rest);
+                return format!("{proxy_base}{rest}");
             }
         }
         if let Some(rest) = href.strip_prefix(upstream_endpoint) {
-            return format!("{}{}", proxy_base, rest);
+            return format!("{proxy_base}{rest}");
         }
     }
 
@@ -73,7 +73,7 @@ pub async fn git_info_refs(
     let source = git_source_from_path(uri.path());
     let (endpoint, client, _) = hub_config(&state, source);
     let query = uri.query().unwrap_or("");
-    let upstream_url = format!("{}/{}/{}.git/info/refs?{}", endpoint, owner, repo, query);
+    let upstream_url = format!("{endpoint}/{owner}/{repo}.git/info/refs?{query}");
     git_proxy_pass(client, &upstream_url, Method::GET, headers, None).await
 }
 
@@ -90,11 +90,11 @@ pub async fn git_upload_pack(
         "ms" => &state.config.modelscope.endpoint,
         _ => &state.config.huggingface.endpoint,
     };
-    let upstream_url = format!("{}/{}/{}.git/git-upload-pack", endpoint, owner, repo);
+    let upstream_url = format!("{endpoint}/{owner}/{repo}.git/git-upload-pack");
 
     let body = axum::body::to_bytes(request.into_body(), 50 * 1024 * 1024)
         .await
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{}", e)))?;
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{e}")))?;
 
     git_proxy_pass(
         client,
@@ -115,11 +115,11 @@ pub async fn lfs_batch(
 ) -> Result<Response, crate::server::AppError> {
     let source = git_source_from_path(uri.path());
     let (endpoint, client, _) = hub_config(&state, source);
-    let upstream_url = format!("{}/{}/{}.git/info/lfs/objects/batch", endpoint, owner, repo);
+    let upstream_url = format!("{endpoint}/{owner}/{repo}.git/info/lfs/objects/batch");
 
     let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
         .await
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{}", e)))?;
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{e}")))?;
 
     let mut req = client.post(&upstream_url);
     req = req.header("Content-Type", "application/vnd.git-lfs+json");
@@ -130,7 +130,7 @@ pub async fn lfs_batch(
         _ => &state.config.huggingface.token,
     };
     if let Some(ref token) = token {
-        req = req.header("Authorization", format!("Bearer {}", token));
+        req = req.header("Authorization", format!("Bearer {token}"));
     }
     if let Some(ua) = headers.get("user-agent").and_then(|v| v.to_str().ok()) {
         req = req.header("User-Agent", ua);
@@ -138,21 +138,21 @@ pub async fn lfs_batch(
 
     let resp =
         req.body(body).send().await.map_err(|e| {
-            crate::server::AppError::from(anyhow::anyhow!("LFS upstream error: {}", e))
+            crate::server::AppError::from(anyhow::anyhow!("LFS upstream error: {e}"))
         })?;
 
     let status = resp.status();
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("LFS read error: {}", e)))?;
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("LFS read error: {e}")))?;
 
     let scheme = "http";
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("127.0.0.1:3000");
-    let proxy_base = format!("{}://{}", scheme, host);
+    let proxy_base = format!("{scheme}://{host}");
 
     let rewritten = rewrite_lfs_urls(&resp_text, &proxy_base, endpoint, source)
         .map_err(crate::server::AppError::from)?;
@@ -161,7 +161,7 @@ pub async fn lfs_batch(
         .status(status)
         .header("Content-Type", "application/vnd.git-lfs+json")
         .body(axum::body::Body::from(rewritten))
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{}", e)))
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{e}")))
 }
 
 async fn git_proxy_pass(
@@ -187,14 +187,14 @@ async fn git_proxy_pass(
     let resp = req
         .send()
         .await
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("git upstream error: {}", e)))?;
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("git upstream error: {e}")))?;
 
     let status = resp.status();
     let resp_headers = resp.headers().clone();
     let resp_body = resp
         .bytes()
         .await
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("git read error: {}", e)))?;
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("git read error: {e}")))?;
 
     let mut builder = axum::response::Response::builder().status(status);
     for (key, value) in resp_headers.iter() {
@@ -206,7 +206,7 @@ async fn git_proxy_pass(
 
     builder
         .body(axum::body::Body::from(resp_body))
-        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{}", e)))
+        .map_err(|e| crate::server::AppError::from(anyhow::anyhow!("{e}")))
 }
 
 fn git_source_from_path(path: &str) -> &str {

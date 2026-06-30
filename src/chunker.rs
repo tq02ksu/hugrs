@@ -14,13 +14,11 @@ pub fn sha256_hex(data: &[u8]) -> String {
 }
 
 pub fn chunk_data(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
-    data.chunks(chunk_size)
-        .map(|chunk| chunk.to_vec())
-        .collect()
+    data.chunks(chunk_size).map(<[u8]>::to_vec).collect()
 }
 
 pub fn assemble_chunks(chunks: &[Vec<u8>]) -> Vec<u8> {
-    let total_size: usize = chunks.iter().map(|c| c.len()).sum();
+    let total_size: usize = chunks.iter().map(Vec::len).sum();
     let mut result = Vec::with_capacity(total_size);
     for chunk in chunks {
         result.extend_from_slice(chunk);

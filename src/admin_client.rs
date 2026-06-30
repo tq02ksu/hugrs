@@ -71,7 +71,7 @@ impl AdminClient {
         repo: &str,
         source: Option<&str>,
     ) -> anyhow::Result<RepoShowResponse> {
-        let path = with_source(&format!("/_hugrs/repos/{}", repo), source);
+        let path = with_source(&format!("/_hugrs/repos/{repo}"), source);
         self.get(&path).await
     }
 
@@ -80,7 +80,7 @@ impl AdminClient {
         repo: &str,
         source: Option<&str>,
     ) -> anyhow::Result<DeleteResponse> {
-        let path = with_source(&format!("/_hugrs/repos/{}", repo), source);
+        let path = with_source(&format!("/_hugrs/repos/{repo}"), source);
         self.delete(&path).await
     }
 
@@ -196,11 +196,13 @@ mod tests {
 
     #[test]
     fn discover_uses_explicit_endpoint_and_token() {
-        let client = AdminClient::discover(
+        let client = match AdminClient::discover(
             Some("http://127.0.0.1:3000".into()),
             Some("test-admin-token".into()),
-        )
-        .unwrap();
+        ) {
+            Ok(client) => client,
+            Err(err) => panic!("discover should succeed: {err}"),
+        };
         assert_eq!(client.base_url, "http://127.0.0.1:3000");
         assert_eq!(client.admin_token, "test-admin-token");
     }
@@ -208,7 +210,10 @@ mod tests {
     #[test]
     fn discover_requires_endpoint_without_override_or_env() {
         std::env::remove_var("HUGRS_CONTROL_ENDPOINT");
-        let client = AdminClient::discover(None, Some("test-admin-token".into())).unwrap();
+        let client = match AdminClient::discover(None, Some("test-admin-token".into())) {
+            Ok(client) => client,
+            Err(err) => panic!("discover should fall back to default endpoint: {err}"),
+        };
         assert_eq!(client.base_url, "http://127.0.0.1:3000");
     }
 }

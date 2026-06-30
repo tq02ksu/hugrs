@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection};
 use rusqlite_migration::{Migrations, M};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug, Clone)]
 pub struct File {
@@ -56,6 +56,12 @@ pub struct MetadataStore {
 }
 
 impl MetadataStore {
+    fn conn(&self) -> anyhow::Result<MutexGuard<'_, Connection>> {
+        self.conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("metadata connection mutex poisoned: {e}"))
+    }
+
     pub fn new(path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -70,11 +76,11 @@ impl MetadataStore {
     }
 
     pub fn raw_conn(&self) -> anyhow::Result<std::sync::MutexGuard<'_, Connection>> {
-        Ok(self.conn.lock().unwrap())
+        self.conn()
     }
 
     fn init_schema(&self) -> anyhow::Result<()> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn()?;
 
         conn.pragma_update(None, "foreign_keys", "OFF")?;
         let migrations = Migrations::new(vec![
@@ -100,7 +106,7 @@ impl MetadataStore {
         total_size: i64,
         source: &str,
     ) -> anyhow::Result<File> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT INTO files (name, repo, total_size, source, last_accessed) VALUES (?1, ?2, ?3, ?4, datetime('now'))",
             params![name, repo, total_size, source],
@@ -123,7 +129,7 @@ impl MetadataStore {
     }
 
     pub fn get_file_by_name(&self, name: &str, source: &str) -> anyhow::Result<Option<File>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files WHERE name = ?1 AND source = ?2",
         )?;
@@ -157,7 +163,7 @@ impl MetadataStore {
         x_linked_etag: Option<&str>,
         content_type: Option<&str>,
     ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "UPDATE files SET etag = ?1, x_repo_commit = ?2, x_linked_size = ?3, x_linked_etag = ?4, content_type = ?5 WHERE name = ?6 AND source = ?7",
             params![etag, x_repo_commit, x_linked_size, x_linked_etag, content_type, name, source],
@@ -166,7 +172,7 @@ impl MetadataStore {
     }
 
     pub fn touch_repo(&self, repo: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "UPDATE files SET last_accessed = datetime('now') WHERE repo = ?1",
             params![repo],
@@ -175,7 +181,7 @@ impl MetadataStore {
     }
 
     pub fn delete_file(&self, name: &str, source: &str) -> anyhow::Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let file_id: Option<i64> = conn
             .query_row(
                 "SELECT id FROM files WHERE name = ?1 AND source = ?2",
@@ -197,7 +203,7 @@ impl MetadataStore {
         let mut stmt = conn.prepare("SELECT sha256 FROM file_chunks WHERE file_id = ?1")?;
         let chunks: Vec<String> = stmt
             .query_map(params![file_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(Result::ok)
             .collect();
         for sha256 in &chunks {
             conn.execute(
@@ -218,11 +224,11 @@ impl MetadataStore {
     }
 
     pub fn delete_files_by_repo(&self, repo: &str) -> anyhow::Result<usize> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT id FROM files WHERE repo = ?1")?;
         let file_ids: Vec<i64> = stmt
             .query_map(params![repo], |row| row.get::<_, i64>(0))?
-            .filter_map(|r| r.ok())
+            .filter_map(Result::ok)
             .collect();
 
         for id in &file_ids {
@@ -232,7 +238,7 @@ impl MetadataStore {
     }
 
     pub fn list_repos_by_access(&self, limit: usize) -> anyhow::Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT repo, MIN(last_accessed) as oldest_access
              FROM files
@@ -256,7 +262,7 @@ impl MetadataStore {
         size: i64,
         compressed_size: i64,
     ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT OR IGNORE INTO chunks (sha256, backend, path, size, compressed_size, orphaned_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
             params![sha256, backend, path, size, compressed_size],
@@ -265,7 +271,7 @@ impl MetadataStore {
     }
 
     pub fn get_chunk(&self, sha256: &str) -> anyhow::Result<Option<Chunk>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at FROM chunks WHERE sha256 = ?1",
         )?;
@@ -290,7 +296,7 @@ impl MetadataStore {
         chunk_index: i64,
         chunk_size: i64,
     ) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let inserted = conn.execute(
             "INSERT OR IGNORE INTO file_chunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
             params![file_id, sha256, chunk_index, chunk_size],
@@ -305,7 +311,7 @@ impl MetadataStore {
     }
 
     pub fn mark_chunk_orphaned(&self, sha256: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "UPDATE chunks SET orphaned_at = datetime('now') WHERE sha256 = ?1",
             params![sha256],
@@ -314,7 +320,7 @@ impl MetadataStore {
     }
 
     pub fn clear_chunk_orphaned(&self, sha256: &str) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "UPDATE chunks SET orphaned_at = NULL WHERE sha256 = ?1",
             params![sha256],
@@ -323,7 +329,7 @@ impl MetadataStore {
     }
 
     pub fn get_file_chunks(&self, file_id: i64) -> anyhow::Result<Vec<FileChunk>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT file_id, sha256, chunk_index, chunk_size FROM file_chunks WHERE file_id = ?1 ORDER BY chunk_index",
         )?;
@@ -347,7 +353,7 @@ impl MetadataStore {
         file_id: i64,
         chunk_index: usize,
     ) -> anyhow::Result<Option<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let result = conn.query_row(
             "SELECT sha256 FROM file_chunks WHERE file_id = ?1 AND chunk_index = ?2",
             params![file_id, chunk_index as i64],
@@ -361,7 +367,7 @@ impl MetadataStore {
     }
 
     pub fn list_files(&self) -> anyhow::Result<Vec<File>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files ORDER BY repo, name",
         )?;
@@ -389,7 +395,7 @@ impl MetadataStore {
     }
 
     pub fn get_orphan_chunks(&self) -> anyhow::Result<Vec<Chunk>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at
              FROM chunks
@@ -415,7 +421,7 @@ impl MetadataStore {
     }
 
     pub fn list_orphan_chunks_batch(&self, limit: usize) -> anyhow::Result<Vec<Chunk>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at
              FROM chunks
@@ -442,7 +448,7 @@ impl MetadataStore {
     }
 
     pub fn list_orphan_chunks_stats(&self) -> anyhow::Result<(i64, i64)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let count = conn.query_row(
             "SELECT COUNT(*) FROM chunks WHERE ref_count = 0 AND orphaned_at IS NOT NULL",
             [],
@@ -457,13 +463,13 @@ impl MetadataStore {
     }
 
     pub fn delete_chunk(&self, sha256: &str) -> anyhow::Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let deleted = conn.execute("DELETE FROM chunks WHERE sha256 = ?1", params![sha256])?;
         Ok(deleted > 0)
     }
 
     pub fn get_stats(&self) -> anyhow::Result<Stats> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let file_count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
         let repo_count: i64 =
             conn.query_row("SELECT COUNT(DISTINCT repo) FROM files", [], |row| {
@@ -502,7 +508,7 @@ impl MetadataStore {
 
     // TRANSITIONAL: remove in v0.X.0 ──────────────────────────
     pub fn list_files_with_missing_headers(&self) -> anyhow::Result<Vec<File>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn
             .prepare("SELECT id, name, repo, total_size, created_at, last_accessed, source, etag, x_repo_commit, x_linked_size, x_linked_etag, content_type FROM files WHERE etag IS NULL OR content_type IS NULL")?;
         let rows = stmt.query_map([], |row| {

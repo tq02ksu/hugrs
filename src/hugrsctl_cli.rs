@@ -339,7 +339,13 @@ fn print_delete_response(json: bool, value: &DeleteResponse) {
 }
 
 fn print_json<T: serde::Serialize>(value: &T) {
-    println!("{}", serde_json::to_string_pretty(value).unwrap());
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => println!("{json}"),
+        Err(err) => {
+            eprintln!("failed to serialize JSON output: {err}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn print_repo_table(rows: &[RepoRow]) {
@@ -395,7 +401,7 @@ fn print_file_table(items: &[FileListItem]) {
             .map(|i| join_sources(&i.sources))
             .collect::<Vec<_>>()
             .iter()
-            .map(|s| s.as_str())
+            .map(String::as_str)
             .chain(std::iter::once("SOURCES")),
     );
     let size_values = items
@@ -405,7 +411,7 @@ fn print_file_table(items: &[FileListItem]) {
     let size_w = column_width(
         size_values
             .iter()
-            .map(|s| s.as_str())
+            .map(String::as_str)
             .chain(std::iter::once("SIZE")),
     );
 

@@ -6,7 +6,7 @@ use dashmap::DashMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
@@ -16,6 +16,22 @@ type ClientRange = (u64, u64);
 type ClientSender = mpsc::Sender<Result<Bytes, anyhow::Error>>;
 type Subscribers = StdMutex<Vec<(ClientRange, ClientSender)>>;
 type ChunkMessage = Result<Arc<Bytes>, Arc<String>>;
+
+trait LockExt<T> {
+    fn lock_or_recover(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> LockExt<T> for StdMutex<T> {
+    fn lock_or_recover(&self) -> MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!("recovering from poisoned session mutex");
+                poisoned.into_inner()
+            }
+        }
+    }
+}
 
 fn prefetch_budget(base: usize, active_cursors: usize) -> usize {
     match active_cursors {
@@ -136,8 +152,7 @@ impl SessionTable {
         }
 
         let cached_sha = cached_chunks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .get(&(chunk_idx as usize))
             .cloned();
         if let Some(ref sha) = cached_sha {
@@ -215,7 +230,7 @@ impl ChunkReader {
             (raw, actual)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("sha256 panicked: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("sha256 panicked: {e}"))?;
 
         if actual == sha256 {
             return Ok(Some(Bytes::from(raw)));
@@ -243,7 +258,7 @@ impl ChunkReader {
         user_agent: Option<String>,
         cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
     ) -> anyhow::Result<Bytes> {
-        let range_header = format!("bytes={}-{}", start, end);
+        let range_header = format!("bytes={start}-{end}");
         let mut req = self.http_client.get(&url).header("Range", &range_header);
         if let Some(ref ua) = user_agent {
             req = req.header("User-Agent", ua);
@@ -251,12 +266,12 @@ impl ChunkReader {
         let data = req
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("chunk {} request error: {}", chunk_idx, e))?
+            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?
             .error_for_status()
-            .map_err(|e| anyhow::anyhow!("chunk {} request error: {}", chunk_idx, e))?
+            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?
             .bytes()
             .await
-            .map_err(|e| anyhow::anyhow!("chunk {} download error: {}", chunk_idx, e))?;
+            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} download error: {e}"))?;
 
         self.fetched_bytes
             .fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -266,11 +281,10 @@ impl ChunkReader {
             (h, data)
         })
         .await
-        .map_err(|e| anyhow::anyhow!("chunk {} sha256 panicked: {}", chunk_idx, e))?;
+        .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} sha256 panicked: {e}"))?;
 
         let expected_sha = cached_chunks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .get(&(chunk_idx as usize))
             .cloned();
         if self.verify_sha256
@@ -295,8 +309,7 @@ impl ChunkReader {
 
         let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
         cached_chunks
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .insert(chunk_idx as usize, sha256.clone());
         let _ = self.event_tx.send(ChunkStoredEvent {
             sha256: sha256.clone(),
@@ -387,7 +400,7 @@ impl FileDownloadSession {
     }
 
     fn signal_file_ready(&self, file: File, total_size: u64) {
-        self.file_data.lock().unwrap().replace((file, total_size));
+        self.file_data.lock_or_recover().replace((file, total_size));
         self.file_ready.store(true, Ordering::SeqCst);
     }
 
@@ -403,19 +416,14 @@ impl FileDownloadSession {
             .min(total_size.saturating_sub(1));
 
         if req_start > req_end || req_start >= total_size {
-            anyhow::bail!(
-                "invalid range: bytes={}-{}/{}",
-                req_start,
-                req_end,
-                total_size
-            );
+            anyhow::bail!("invalid range: bytes={req_start}-{req_end}/{total_size}");
         }
         let content_length = req_end - req_start + 1;
 
         let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 
         {
-            let mut subs = self.subscribers.lock().unwrap();
+            let mut subs = self.subscribers.lock_or_recover();
             subs.push(((req_start, req_end), tx));
         }
         self.subscriber_count.fetch_add(1, Ordering::Relaxed);
@@ -432,7 +440,7 @@ impl FileDownloadSession {
     }
 
     fn ensure_running(self: &Arc<Self>) {
-        let mut task_guard = self.task.lock().unwrap();
+        let mut task_guard = self.task.lock_or_recover();
         if task_guard.is_some() {
             return;
         }
@@ -457,7 +465,7 @@ impl FileDownloadSession {
         let mut completed: HashSet<usize> = HashSet::new();
         loop {
             let client_ranges: Vec<(u64, u64)> = {
-                let subs = self.subscribers.lock().unwrap();
+                let subs = self.subscribers.lock_or_recover();
                 subs.iter().map(|(r, _)| *r).collect()
             };
 
@@ -472,7 +480,7 @@ impl FileDownloadSession {
 
             if client_ranges.is_empty() {
                 self.state.store(2, Ordering::Relaxed);
-                self.subscribers.lock().unwrap().clear();
+                self.subscribers.lock_or_recover().clear();
                 break;
             }
 
@@ -504,7 +512,7 @@ impl FileDownloadSession {
                 {
                     Ok(rx) => rx,
                     Err(e) => {
-                        self.forward_error(anyhow::anyhow!("chunk {} subscribe failed: {}", i, e))
+                        self.forward_error(anyhow::anyhow!("chunk {i} subscribe failed: {e}"))
                             .await;
                         break;
                     }
@@ -585,17 +593,14 @@ impl FileDownloadSession {
                     }
                     Err(broadcast::error::RecvError::Closed) => {
                         self.forward_error(anyhow::anyhow!(
-                            "chunk {} download closed unexpectedly",
-                            i
+                            "chunk {i} download closed unexpectedly"
                         ))
                         .await;
                         break;
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         self.forward_error(anyhow::anyhow!(
-                            "chunk {} receiver lagged by {} messages",
-                            i,
-                            n
+                            "chunk {i} receiver lagged by {n} messages"
                         ))
                         .await;
                         break;
@@ -603,14 +608,14 @@ impl FileDownloadSession {
                 }
             } else {
                 self.state.store(2, Ordering::Relaxed);
-                self.subscribers.lock().unwrap().clear();
+                self.subscribers.lock_or_recover().clear();
                 break;
             }
 
             self.clean_subscribers();
         }
 
-        self.subscribers.lock().unwrap().clear();
+        self.subscribers.lock_or_recover().clear();
 
         tracing::info!(
             "[f{}] {}: session finished in {}ms, prefetch_active={}, all senders dropped",
@@ -620,29 +625,29 @@ impl FileDownloadSession {
             self.prefetch_active(),
         );
 
-        self.task.lock().unwrap().take();
+        self.task.lock_or_recover().take();
     }
 
     fn track_prefetch(&self, idx: usize) -> bool {
-        self.inflight_prefetches.lock().unwrap().insert(idx)
+        self.inflight_prefetches.lock_or_recover().insert(idx)
     }
 
     fn untrack_prefetch(&self, idx: usize) {
-        self.inflight_prefetches.lock().unwrap().remove(&idx);
+        self.inflight_prefetches.lock_or_recover().remove(&idx);
     }
 
     fn finish_prefetches(&self, completed: &HashSet<usize>, cached: &HashSet<usize>) -> usize {
-        let mut inflight = self.inflight_prefetches.lock().unwrap();
+        let mut inflight = self.inflight_prefetches.lock_or_recover();
         retain_active_prefetches(&mut inflight, completed, cached)
     }
 
     fn prefetch_active(&self) -> usize {
-        self.inflight_prefetches.lock().unwrap().len()
+        self.inflight_prefetches.lock_or_recover().len()
     }
 
     async fn forward_chunk(&self, chunk_start: u64, data: &[u8]) {
         let targets: Vec<(ClientRange, ClientSender)> = {
-            let subs = self.subscribers.lock().unwrap();
+            let subs = self.subscribers.lock_or_recover();
             subs.iter()
                 .map(|((s, e), tx)| ((*s, *e), tx.clone()))
                 .collect()
@@ -670,7 +675,7 @@ impl FileDownloadSession {
     async fn forward_error(&self, err: anyhow::Error) {
         let message = err.to_string();
         let targets: Vec<ClientSender> = {
-            let subs = self.subscribers.lock().unwrap();
+            let subs = self.subscribers.lock_or_recover();
             subs.iter().map(|(_, tx)| tx.clone()).collect()
         };
         for tx in &targets {
@@ -679,7 +684,7 @@ impl FileDownloadSession {
     }
 
     fn clean_subscribers(&self) {
-        let mut subs = self.subscribers.lock().unwrap();
+        let mut subs = self.subscribers.lock_or_recover();
         subs.retain(|(_, tx)| !tx.is_closed());
         self.subscriber_count.store(subs.len(), Ordering::Relaxed);
     }
@@ -749,6 +754,7 @@ mod tests {
     use super::{
         compute_active_cursors, prefetch_budget, retain_active_prefetches, select_next_chunk,
         ChunkStoredEvent, FileDownloadSession, FileDownloadSessionConfig, FileDownloadSessionDeps,
+        LockExt,
     };
     use crate::config::Config;
     use crate::metadata::File;
@@ -834,7 +840,7 @@ mod tests {
                 crate::storage::Compression::None,
             ));
         let session_table = Arc::new(super::SessionTable::new(
-            client.clone(),
+            client,
             backend,
             event_tx,
             fetched_bytes,
@@ -859,11 +865,11 @@ mod tests {
             },
         ));
 
-        *session.task.lock().unwrap() = Some(tokio::spawn(async {}) as JoinHandle<()>);
+        *session.task.lock_or_recover() = Some(tokio::spawn(async {}) as JoinHandle<()>);
 
         session.clone().run_download_loop().await;
 
-        assert!(session.task.lock().unwrap().is_none());
+        assert!(session.task.lock_or_recover().is_none());
     }
 
     #[tokio::test]
@@ -879,7 +885,7 @@ mod tests {
                 crate::storage::Compression::None,
             ));
         let session_table = Arc::new(super::SessionTable::new(
-            client.clone(),
+            client,
             backend,
             event_tx,
             fetched_bytes,

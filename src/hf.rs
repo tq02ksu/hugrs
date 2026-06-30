@@ -25,7 +25,7 @@ pub async fn pull_model(
     if let Some(ref token) = config.huggingface.token {
         headers.insert(
             "Authorization",
-            reqwest::header::HeaderValue::from_str(&format!("Bearer {}", token))?,
+            reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?,
         );
     }
 

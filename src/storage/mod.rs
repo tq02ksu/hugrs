@@ -19,7 +19,7 @@ impl std::str::FromStr for Compression {
         match s.to_lowercase().as_str() {
             "zstd" => Ok(Compression::Zstd),
             "none" => Ok(Compression::None),
-            other => anyhow::bail!("unknown compression algorithm: {}", other),
+            other => anyhow::bail!("unknown compression algorithm: {other}"),
         }
     }
 }
