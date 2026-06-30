@@ -22,7 +22,7 @@ unwrap_used = "deny"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["multipart"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
-sha2 = "0.10"
+sha2 = "0.11"
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls", "json"] }
 aws-sdk-s3 = { version = "1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
