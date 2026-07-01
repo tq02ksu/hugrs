@@ -48,7 +48,7 @@ cargo run --bin hugrsctl -- --help
 cargo test
 
 # Lint
-cargo clippy -- -D warnings
+cargo clippy --all-features
 
 # Format
 cargo fmt -- --check
@@ -64,6 +64,9 @@ cargo build --release
 - SQLite accessed via `rusqlite::Connection` with WAL pragma enabled at startup
 - Storage backends implement the `StorageBackend` trait
 - CLI uses clap derive macros
+- Clippy lint levels are centralized in `Cargo.toml` under `[lints.clippy]`
+- Keep CI lint execution thin: it should run Cargo/Clippy, not redefine lint policy in workflow flags
+- Prefer curated project lints over crate-level `#![forbid(...)]` attributes unless a rule truly must not be overridden
 - Follow standard Rust naming conventions (snake_case, CamelCase)
 - Keep modules focused: one module = one responsibility
 - No comments unless code is genuinely non-obvious
@@ -86,7 +89,7 @@ cargo build --release
 - Before creating any commit, run the relevant verification commands for the change and confirm they pass.
 - For Rust code changes, the default pre-commit quality gates are:
   - `cargo fmt -- --check`
-  - `cargo clippy -- -D warnings`
+  - `cargo clippy --all-features`
   - `cargo test`
 - During iteration, targeted tests are acceptable for faster feedback, but do not commit until the full required checks for the touched area have passed.
 - Do not commit code that is known to fail formatting, clippy, or tests.
@@ -100,7 +103,7 @@ cargo build --release
   2. Re-review the implementation against the changelog and fix any incomplete design or release details first.
   3. If nothing else is missing, run the quality gates:
      - `cargo fmt -- --check`
-     - `cargo clippy -- -D warnings`
+     - `cargo clippy --all-features`
      - `cargo test`
   4. Only after the checks pass, bump the version in `Cargo.toml`.
   5. Update `Cargo.lock`, Docker image tags in `README.md` / `README_zh.md`, and any user-facing docs that mention the current release version.
