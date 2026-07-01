@@ -316,7 +316,10 @@ fn print_file_show(json: bool, value: &FileShowResponse) {
     println!("sources: {}", value.sources.join(","));
     println!("size: {}", format_bytes_i64(value.size));
     println!("downloaded: {}", format_bytes_i64(value.downloaded_size));
-    println!("complete: {}", yes_no(value.complete));
+    println!(
+        "progress: {}",
+        format_progress_detail(value.downloaded_size, value.size, value.complete)
+    );
     println!(
         "content-type: {}",
         value.content_type.as_deref().unwrap_or("-")
@@ -421,30 +424,35 @@ fn print_file_table(items: &[FileListItem]) {
             .map(String::as_str)
             .chain(std::iter::once("DOWNLOADED")),
     );
-    let complete_w = column_width(
-        items
+    let progress_values = items
+        .iter()
+        .map(|i| format_progress(i.downloaded_size, i.size, i.complete))
+        .collect::<Vec<_>>();
+    let progress_w = column_width(
+        progress_values
             .iter()
-            .map(|i| yes_no(i.complete))
-            .chain(std::iter::once("COMPLETE")),
+            .map(String::as_str)
+            .chain(std::iter::once("PROGRESS")),
     );
 
     println!(
-        "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {:>downloaded_w$}  {:<complete_w$}  CONTENT-TYPE  LAST ACCESSED",
-        "REPO", "FILE", "SOURCES", "SIZE", "DOWNLOADED", "COMPLETE",
+        "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {:>downloaded_w$}  {:>progress_w$}  CONTENT-TYPE  LAST ACCESSED",
+        "REPO", "FILE", "SOURCES", "SIZE", "DOWNLOADED", "PROGRESS",
     );
-    for ((item, size), downloaded) in items
+    for (((item, size), downloaded), progress) in items
         .iter()
         .zip(size_values.iter())
         .zip(downloaded_values.iter())
+        .zip(progress_values.iter())
     {
         println!(
-            "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {:>downloaded_w$}  {:<complete_w$}  {}  {}",
+            "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {:>downloaded_w$}  {:>progress_w$}  {}  {}",
             item.repo,
             item.file,
             join_sources(&item.sources),
             size,
             downloaded,
-            yes_no(item.complete),
+            progress,
             item.content_type.as_deref().unwrap_or("-"),
             item.last_accessed,
         );
@@ -483,6 +491,28 @@ fn format_bytes_i64(bytes: i64) -> String {
     }
 }
 
+fn format_progress(downloaded_size: i64, size: i64, complete: bool) -> String {
+    format!("{}%", progress_percent(downloaded_size, size, complete))
+}
+
+fn format_progress_detail(downloaded_size: i64, size: i64, complete: bool) -> String {
+    format!(
+        "{} / {} ({})",
+        format_bytes_i64(downloaded_size),
+        format_bytes_i64(size),
+        format_progress(downloaded_size, size, complete)
+    )
+}
+
+fn progress_percent(downloaded_size: i64, size: i64, complete: bool) -> u64 {
+    if size <= 0 {
+        return if complete { 100 } else { 0 };
+    }
+
+    let downloaded = downloaded_size.clamp(0, size) as u64;
+    ((downloaded * 100) / size as u64).min(100)
+}
+
 fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
@@ -518,4 +548,22 @@ struct RepoRow {
     files: String,
     logical_size: String,
     last_accessed: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_progress, format_progress_detail};
+
+    #[test]
+    fn format_progress_shows_percentage() {
+        assert_eq!(format_progress(4, 10, false), "40%");
+        assert_eq!(format_progress(10, 10, true), "100%");
+        assert_eq!(format_progress(0, 10, false), "0%");
+        assert_eq!(format_progress(0, 0, true), "100%");
+    }
+
+    #[test]
+    fn format_progress_detail_shows_downloaded_and_total_bytes() {
+        assert_eq!(format_progress_detail(4, 10, false), "4 B / 10 B (40%)");
+    }
 }
