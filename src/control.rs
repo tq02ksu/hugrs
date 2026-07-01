@@ -84,6 +84,8 @@ pub struct FileListItem {
     pub file: String,
     pub sources: Vec<String>,
     pub size: i64,
+    pub downloaded_size: i64,
+    pub complete: bool,
     pub content_type: Option<String>,
     pub last_accessed: String,
 }
@@ -94,6 +96,8 @@ pub struct FileShowResponse {
     pub file: String,
     pub sources: Vec<String>,
     pub size: i64,
+    pub downloaded_size: i64,
+    pub complete: bool,
     pub content_type: Option<String>,
     pub last_accessed: String,
 }

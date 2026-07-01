@@ -64,6 +64,44 @@ async fn seed_file(svc: &CacheService, name: &str, repo: &str, source: &str, dat
     }
 }
 
+async fn seed_incomplete_file(
+    svc: &CacheService,
+    name: &str,
+    repo: &str,
+    source: &str,
+    total_size: i64,
+    downloaded_data: &[u8],
+) {
+    svc.metadata.delete_file(name, source).ok();
+    let file = svc
+        .metadata
+        .add_file(name, repo, total_size, source)
+        .unwrap();
+    let chunks = hugrs::chunker::chunk_with_hashes(downloaded_data, CHUNK_SIZE);
+    for chunk in &chunks {
+        svc.backend.put(&chunk.sha256, &chunk.data).await.unwrap();
+        let path = svc.chunk_path(&chunk.sha256);
+        svc.metadata
+            .ensure_chunk(
+                &chunk.sha256,
+                "local",
+                &path,
+                chunk.chunk_size as i64,
+                chunk.chunk_size as i64,
+            )
+            .unwrap();
+        svc.metadata
+            .link_file_chunk(
+                file.id,
+                &chunk.sha256,
+                chunk.chunk_index as i64,
+                chunk.chunk_size as i64,
+            )
+            .unwrap();
+    }
+    svc.metadata.touch_repo(repo).unwrap();
+}
+
 // ---------- mock upstream ----------
 
 #[derive(Clone)]
@@ -1031,6 +1069,81 @@ async fn test_control_api_file_delete_without_source_applies_to_all_sources() {
         .get_file_by_name("shared.bin", "ms")
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn test_control_api_files_report_incomplete_download_status() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+
+    let seed_service = make_service(&dir, "http_db");
+    seed_incomplete_file(&seed_service, "partial.bin", "repo-a", "hf", 10, b"1234").await;
+
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let list_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/_hugrs/files")
+        .header("Authorization", "Bearer test-admin-token")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let list_resp = app.clone().oneshot(list_req).await.unwrap();
+    assert_eq!(list_resp.status(), StatusCode::OK);
+    let list_body = axum::body::to_bytes(list_resp.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    let list_json: serde_json::Value = serde_json::from_slice(&list_body).unwrap();
+    let item = &list_json["items"][0];
+    assert_eq!(item["size"], json!(10));
+    assert_eq!(item["downloaded_size"], json!(4));
+    assert_eq!(item["complete"], json!(false));
+
+    let show_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/_hugrs/files/show?repo=repo-a&file=partial.bin")
+        .header("Authorization", "Bearer test-admin-token")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let show_resp = app.oneshot(show_req).await.unwrap();
+    assert_eq!(show_resp.status(), StatusCode::OK);
+    let show_body = axum::body::to_bytes(show_resp.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    let show_json: serde_json::Value = serde_json::from_slice(&show_body).unwrap();
+    assert_eq!(show_json["size"], json!(10));
+    assert_eq!(show_json["downloaded_size"], json!(4));
+    assert_eq!(show_json["complete"], json!(false));
+}
+
+#[tokio::test]
+async fn test_control_api_files_report_complete_download_status() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+
+    let seed_service = make_service(&dir, "http_db");
+    seed_file(&seed_service, "complete.bin", "repo-a", "hf", b"12345678").await;
+
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let show_req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/_hugrs/files/show?repo=repo-a&file=complete.bin")
+        .header("Authorization", "Bearer test-admin-token")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let show_resp = app.oneshot(show_req).await.unwrap();
+    assert_eq!(show_resp.status(), StatusCode::OK);
+    let show_body = axum::body::to_bytes(show_resp.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    let show_json: serde_json::Value = serde_json::from_slice(&show_body).unwrap();
+    assert_eq!(show_json["size"], json!(8));
+    assert_eq!(show_json["downloaded_size"], json!(8));
+    assert_eq!(show_json["complete"], json!(true));
 }
 
 #[tokio::test]

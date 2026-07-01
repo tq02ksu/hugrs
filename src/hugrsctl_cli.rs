@@ -315,6 +315,8 @@ fn print_file_show(json: bool, value: &FileShowResponse) {
     println!("file: {}", value.file);
     println!("sources: {}", value.sources.join(","));
     println!("size: {}", format_bytes_i64(value.size));
+    println!("downloaded: {}", format_bytes_i64(value.downloaded_size));
+    println!("complete: {}", yes_no(value.complete));
     println!(
         "content-type: {}",
         value.content_type.as_deref().unwrap_or("-")
@@ -403,24 +405,46 @@ fn print_file_table(items: &[FileListItem]) {
         .iter()
         .map(|i| format_bytes_i64(i.size))
         .collect::<Vec<_>>();
+    let downloaded_values = items
+        .iter()
+        .map(|i| format_bytes_i64(i.downloaded_size))
+        .collect::<Vec<_>>();
     let size_w = column_width(
         size_values
             .iter()
             .map(String::as_str)
             .chain(std::iter::once("SIZE")),
     );
+    let downloaded_w = column_width(
+        downloaded_values
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once("DOWNLOADED")),
+    );
+    let complete_w = column_width(
+        items
+            .iter()
+            .map(|i| yes_no(i.complete))
+            .chain(std::iter::once("COMPLETE")),
+    );
 
     println!(
-        "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  CONTENT-TYPE  LAST ACCESSED",
-        "REPO", "FILE", "SOURCES", "SIZE",
+        "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {:>downloaded_w$}  {:<complete_w$}  CONTENT-TYPE  LAST ACCESSED",
+        "REPO", "FILE", "SOURCES", "SIZE", "DOWNLOADED", "COMPLETE",
     );
-    for (item, size) in items.iter().zip(size_values.iter()) {
+    for ((item, size), downloaded) in items
+        .iter()
+        .zip(size_values.iter())
+        .zip(downloaded_values.iter())
+    {
         println!(
-            "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {}  {}",
+            "{:<repo_w$}  {:<file_w$}  {:<source_w$}  {:>size_w$}  {:>downloaded_w$}  {:<complete_w$}  {}  {}",
             item.repo,
             item.file,
             join_sources(&item.sources),
             size,
+            downloaded,
+            yes_no(item.complete),
             item.content_type.as_deref().unwrap_or("-"),
             item.last_accessed,
         );

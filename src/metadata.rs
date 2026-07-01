@@ -380,6 +380,16 @@ impl MetadataStore {
         Ok(result)
     }
 
+    pub fn get_file_downloaded_size(&self, file_id: i64) -> anyhow::Result<i64> {
+        let conn = self.conn()?;
+        let downloaded = conn.query_row(
+            "SELECT COALESCE(SUM(chunk_size), 0) FROM file_chunks WHERE file_id = ?1",
+            params![file_id],
+            |row| row.get(0),
+        )?;
+        Ok(downloaded)
+    }
+
     pub fn is_chunk_linked(
         &self,
         file_id: i64,

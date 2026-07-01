@@ -1054,7 +1054,10 @@ fn require_admin(headers: &HeaderMap, state: &AppState) -> Result<(), AppError> 
     }
 }
 
-fn aggregate_files(files: &[crate::metadata::File]) -> Vec<FileListItem> {
+fn aggregate_files(
+    metadata: &crate::metadata::MetadataStore,
+    files: &[crate::metadata::File],
+) -> Result<Vec<FileListItem>, AppError> {
     let mut grouped: BTreeMap<(String, String), Vec<crate::metadata::File>> = BTreeMap::new();
     for file in files {
         grouped
@@ -1067,18 +1070,27 @@ fn aggregate_files(files: &[crate::metadata::File]) -> Vec<FileListItem> {
         .into_iter()
         .map(|((repo, file), entries)| {
             let first = &entries[0];
-            FileListItem {
+            let downloaded_size = entries
+                .iter()
+                .map(|entry| metadata.get_file_downloaded_size(entry.id))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            Ok(FileListItem {
                 repo,
                 file,
                 sources: entries.iter().map(|f| f.source.clone()).collect(),
                 size: first.total_size,
+                downloaded_size,
+                complete: downloaded_size >= first.total_size,
                 content_type: first.content_type.clone(),
                 last_accessed: entries
                     .iter()
                     .map(|f| f.last_accessed.clone())
                     .max()
                     .unwrap_or_default(),
-            }
+            })
         })
         .collect()
 }
@@ -1226,7 +1238,7 @@ async fn control_repo_show(
     if matched.is_empty() {
         return Err(AppError::NotFound(format!("repo not found: {repo}")));
     }
-    let items = aggregate_files(&matched);
+    let items = aggregate_files(&service.metadata, &matched)?;
     let sources = matched
         .iter()
         .map(|f| f.source.clone())
@@ -1280,7 +1292,7 @@ async fn control_files_list(
             query.source.as_deref().is_none() || query.source.as_deref() == Some(f.source.as_str())
         })
         .collect();
-    let items = aggregate_files(&filtered);
+    let items = aggregate_files(&service.metadata, &filtered)?;
     Ok(Json(FileListResponse {
         total: items.len(),
         items,
@@ -1310,11 +1322,21 @@ async fn control_file_show(
     }
     let first = &matched[0];
     let sources = matched.iter().map(|f| f.source.clone()).collect();
+    let downloaded_size = matched
+        .iter()
+        .map(|file| service.metadata.get_file_downloaded_size(file.id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::Anyhow)?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
     Ok(Json(FileShowResponse {
         repo: query.repo,
         file: query.file,
         sources,
         size: first.total_size,
+        downloaded_size,
+        complete: downloaded_size >= first.total_size,
         content_type: first.content_type.clone(),
         last_accessed: first.last_accessed.clone(),
     }))
