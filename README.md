@@ -15,14 +15,14 @@ High-performance HuggingFace & ModelScope model mirror. Prefetch-driven, content
 ## Docker
 
 ```bash
-docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.4.0
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.5.0
 
 # custom endpoint + persistent cache (named volume)
 docker volume create hugrs-cache
 docker run -p 3000:3000 \
   -v hugrs-cache:/home/hugrs/.cache/hugrs \
   -e HUGRS_HF_ENDPOINT=https://hf-mirror.com \
-  ghcr.io/tq02ksu/hugrs:0.4.0
+  ghcr.io/tq02ksu/hugrs:0.5.0
 ```
 
 ## Quick Start

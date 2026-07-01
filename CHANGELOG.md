@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0] - 2026-07-01
+
+### Added
+- ETag validation on HEAD and GET cache hits, with If-None-Match (304) support
+- Transitional startup backfill for NULL etag/content_type in cached metadata
+- Daemon CLI config overrides via figment (CLI args merged into config hierarchy)
+- Streaming tests, config tests, and daemon CLI tests
+- Dependabot configuration for automated dependency updates
+
+### Changed
+- Refactored: deleted `upload()` abstraction; chunk storage is now inline in download paths
+- Refactored: unified HTTP chunk reads through file download sessions
+- Tightened clippy lint policy with 9 additional deny-level lints
+
+### Fixed
+- Forward upstream error responses for API and file proxy paths
+- SHA operation error caused by sha2 version bump (input length mismatch)
+
+### CI
+- Merged cargo-audit and trivy scan into unified CI workflow
+- Added GNU Linux release package (alongside musl)
+
 ## [0.4.0] - 2026-06-28
 
 ### Added
