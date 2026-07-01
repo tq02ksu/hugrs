@@ -10,7 +10,8 @@ pub struct ChunkWithHash {
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    let hash_bytes = hasher.finalize().to_vec();
+    hash_bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 pub fn chunk_data(data: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
