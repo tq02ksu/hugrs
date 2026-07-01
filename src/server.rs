@@ -1153,10 +1153,7 @@ async fn control_service_gc(
             .map_err(|e| AppError::Anyhow(e.into()))?,
         ))
     } else {
-        let result = service
-            .gc_execute(req.batch_size.unwrap_or(100))
-            .await
-            .map_err(AppError::Anyhow)?;
+        let result = service.gc_execute().await.map_err(AppError::Anyhow)?;
         Ok(Json(
             serde_json::to_value(GcResultResponse {
                 deleted_chunks: result.deleted_chunks,

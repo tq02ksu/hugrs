@@ -37,28 +37,13 @@ impl AdminClient {
     }
 
     pub async fn service_gc_preview(&self) -> anyhow::Result<GcPreviewResponse> {
-        self.post(
-            "/_hugrs/service/gc",
-            &GcRequest {
-                dry_run: true,
-                batch_size: None,
-            },
-        )
-        .await
+        self.post("/_hugrs/service/gc", &GcRequest { dry_run: true })
+            .await
     }
 
-    pub async fn service_gc_execute(
-        &self,
-        batch_size: Option<usize>,
-    ) -> anyhow::Result<GcResultResponse> {
-        self.post(
-            "/_hugrs/service/gc",
-            &GcRequest {
-                dry_run: false,
-                batch_size,
-            },
-        )
-        .await
+    pub async fn service_gc_execute(&self) -> anyhow::Result<GcResultResponse> {
+        self.post("/_hugrs/service/gc", &GcRequest { dry_run: false })
+            .await
     }
 
     pub async fn repos_list(&self, source: Option<&str>) -> anyhow::Result<RepoListResponse> {

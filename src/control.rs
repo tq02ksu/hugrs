@@ -108,7 +108,6 @@ pub struct DeleteResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcRequest {
     pub dry_run: bool,
-    pub batch_size: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

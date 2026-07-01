@@ -84,7 +84,6 @@ hugrsctl service status
 hugrsctl service stats
 hugrsctl service gc --dry-run
 hugrsctl service gc
-hugrsctl service gc --batch-size 100
 ```
 
 - `status`：查看守护进程状态和实际 endpoint

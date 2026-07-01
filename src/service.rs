@@ -81,24 +81,19 @@ impl CacheService {
         let metadata_clone = metadata.clone();
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                if let Err(e) = metadata_clone.ensure_chunk(
+                if let Err(e) = metadata_clone.ensure_chunk_and_link(
                     &event.sha256,
                     "local",
                     &event.path,
                     event.data_len,
                     event.stored_size,
-                ) {
-                    tracing::warn!("ensure_chunk failed for {}: {:?}", event.sha256, e);
-                }
-                if let Err(e) = metadata_clone.link_file_chunk(
                     event.file_id,
-                    &event.sha256,
                     event.chunk_idx,
                     event.data_len,
                 ) {
                     tracing::warn!(
-                        "link_file_chunk failed for file {} chunk {}: {:?}",
-                        event.file_id,
+                        "ensure_chunk_and_link failed for {} chunk {}: {:?}",
+                        event.sha256,
                         event.chunk_idx,
                         e
                     );
@@ -231,16 +226,13 @@ impl CacheService {
                     self.backend.put(&chunk.sha256, &chunk.data).await?;
                 }
                 let path = self.chunk_path(&chunk.sha256);
-                self.metadata.ensure_chunk(
+                self.metadata.ensure_chunk_and_link(
                     &chunk.sha256,
                     "local",
                     &path,
                     chunk.chunk_size as i64,
                     chunk.chunk_size as i64,
-                )?;
-                self.metadata.link_file_chunk(
                     file.id,
-                    &chunk.sha256,
                     chunk.chunk_index as i64,
                     chunk.chunk_size as i64,
                 )?;
@@ -354,17 +346,13 @@ impl CacheService {
             };
 
             let path = self.chunk_path(&chunk.sha256);
-            self.metadata.ensure_chunk(
+            self.metadata.ensure_chunk_and_link(
                 &chunk.sha256,
                 "local",
                 &path,
                 chunk.size as i64,
                 stored_size,
-            )?;
-
-            self.metadata.link_file_chunk(
                 file_id,
-                &chunk.sha256,
                 chunk.index as i64,
                 chunk.size as i64,
             )?;
@@ -537,9 +525,9 @@ impl CacheService {
         })
     }
 
-    pub async fn gc_execute(&self, batch_size: usize) -> anyhow::Result<GcResult> {
-        let limit = batch_size.max(1);
-        let orphans = self.metadata.list_orphan_chunks_batch(limit)?;
+    pub async fn gc_execute(&self) -> anyhow::Result<GcResult> {
+        const GC_BATCH_SIZE: usize = 32;
+        let orphans = self.metadata.list_orphan_chunks_batch(GC_BATCH_SIZE)?;
         let mut result = GcResult::default();
 
         for chunk in orphans {
@@ -559,7 +547,15 @@ impl CacheService {
     }
 
     pub async fn gc(&self) -> anyhow::Result<usize> {
-        Ok(self.gc_execute(usize::MAX).await?.deleted_chunks)
+        let mut total = 0usize;
+        loop {
+            let result = self.gc_execute().await?;
+            if result.deleted_chunks == 0 {
+                break;
+            }
+            total += result.deleted_chunks;
+        }
+        Ok(total)
     }
 
     pub async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
@@ -583,7 +579,7 @@ impl CacheService {
                 stats.original_bytes
             );
 
-            let _ = self.gc_execute(1_000).await?;
+            let _ = self.gc().await?;
         }
         Ok(())
     }

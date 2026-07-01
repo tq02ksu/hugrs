@@ -502,7 +502,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         .await
         .unwrap();
 
-    let result = service.gc_execute(100).await.unwrap();
+    let result = service.gc_execute().await.unwrap();
     assert_eq!(result.deleted_chunks, 1);
     assert!(result.reclaimed_bytes > 0);
     assert!(!service.backend_exists(&sha).await.unwrap());

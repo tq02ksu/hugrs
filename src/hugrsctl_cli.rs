@@ -47,8 +47,6 @@ pub enum ServiceCommand {
     Gc {
         #[arg(long)]
         dry_run: bool,
-        #[arg(long)]
-        batch_size: Option<usize>,
     },
 }
 
@@ -101,15 +99,12 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 let value = client.service_stats().await?;
                 print_service_stats(cli.json, &value);
             }
-            ServiceCommand::Gc {
-                dry_run,
-                batch_size,
-            } => {
+            ServiceCommand::Gc { dry_run } => {
                 if dry_run {
                     let value = client.service_gc_preview().await?;
                     print_gc_preview(cli.json, &value);
                 } else {
-                    let value = client.service_gc_execute(batch_size).await?;
+                    let value = client.service_gc_execute().await?;
                     print_gc_result(cli.json, &value);
                 }
             }

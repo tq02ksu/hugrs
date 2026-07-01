@@ -310,6 +310,38 @@ impl MetadataStore {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_chunk_and_link(
+        &self,
+        sha256: &str,
+        backend: &str,
+        path: &str,
+        size: i64,
+        compressed_size: i64,
+        file_id: i64,
+        chunk_index: i64,
+        chunk_size: i64,
+    ) -> anyhow::Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO chunks (sha256, backend, path, size, compressed_size, orphaned_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
+            params![sha256, backend, path, size, compressed_size],
+        )?;
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO file_chunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
+            params![file_id, sha256, chunk_index, chunk_size],
+        )?;
+        if inserted > 0 {
+            tx.execute(
+                "UPDATE chunks SET ref_count = ref_count + 1, orphaned_at = NULL WHERE sha256 = ?1",
+                params![sha256],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn mark_chunk_orphaned(&self, sha256: &str) -> anyhow::Result<()> {
         let conn = self.conn()?;
         conn.execute(
@@ -464,7 +496,10 @@ impl MetadataStore {
 
     pub fn delete_chunk(&self, sha256: &str) -> anyhow::Result<bool> {
         let conn = self.conn()?;
-        let deleted = conn.execute("DELETE FROM chunks WHERE sha256 = ?1", params![sha256])?;
+        let deleted = conn.execute(
+            "DELETE FROM chunks WHERE sha256 = ?1 AND ref_count = 0",
+            params![sha256],
+        )?;
         Ok(deleted > 0)
     }
 
