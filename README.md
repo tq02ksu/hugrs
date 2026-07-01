@@ -62,7 +62,7 @@ hfd.sh Qwen/Qwen3.5-0.8B
 ### huggingface-cli / hf download
 
 ```bash
-export HF_DEBUG=1 HF_HUB_DOWNLOAD_TIMEOUT=120 HF_HUB_DOWNLOAD_NUM_THREADS=1 HF_ENDPOINT=http://127.0.0.1:3000
+export HF_DEBUG=1 HF_HUB_DOWNLOAD_TIMEOUT=300 HF_ENDPOINT=http://127.0.0.1:3000
 hf download Qwen/Qwen3.5-0.8B
 ```
 
