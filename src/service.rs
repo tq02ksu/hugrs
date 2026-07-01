@@ -877,6 +877,11 @@ impl CacheService {
         let first_headers = head_resp.headers();
         let status = head_resp.status();
 
+        if !status.is_success() && !status.is_redirection() {
+            let body = head_resp.text().await.unwrap_or_default();
+            anyhow::bail!("upstream returned {status}: {body}");
+        }
+
         let x_repo_commit = first_headers
             .get("x-repo-commit")
             .and_then(|v| v.to_str().ok())

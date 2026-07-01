@@ -68,7 +68,7 @@ pub fn app_router(app_state: AppState) -> Router {
         )
         .route(
             "/api/models/{org}/{repo}/{*suffix}",
-            get(hf_model_api_suffix),
+            get(hf_model_api_suffix).head(hf_model_api_suffix),
         )
         .route(
             "/{org}/{repo}/resolve/{revision}/{*path}",
@@ -93,7 +93,7 @@ pub fn app_router(app_state: AppState) -> Router {
         )
         .route(
             "/hf/api/models/{org}/{repo}/{*suffix}",
-            get(hf_model_api_suffix),
+            get(hf_model_api_suffix).head(hf_model_api_suffix),
         )
         .route(
             "/hf/{org}/{repo}/resolve/{revision}/{*path}",
@@ -120,7 +120,7 @@ pub fn app_router(app_state: AppState) -> Router {
         )
         .route(
             "/ms/api/v1/models/{org}/{repo}/{*suffix}",
-            get(ms_model_api_suffix),
+            get(ms_model_api_suffix).head(ms_model_api_suffix),
         )
         .route(
             "/ms/api/v1/models/{org}/{repo}/repo",
@@ -310,11 +310,13 @@ async fn model_info_inner(
 
 pub async fn hf_model_api_suffix(
     State(state): State<AppState>,
+    method: Method,
     OriginalUri(uri): OriginalUri,
     Path((org, repo, suffix)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
     model_api_path_inner(
         state,
+        method,
         "hf",
         org,
         repo,
@@ -326,11 +328,13 @@ pub async fn hf_model_api_suffix(
 
 async fn ms_model_api_suffix(
     State(state): State<AppState>,
+    method: Method,
     OriginalUri(uri): OriginalUri,
     Path((org, repo, suffix)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
     model_api_path_inner(
         state,
+        method,
         "ms",
         org,
         repo,
@@ -342,13 +346,14 @@ async fn ms_model_api_suffix(
 
 async fn model_api_path_inner(
     state: AppState,
+    method: Method,
     source: &str,
     org: String,
     repo: String,
     suffix: String,
     query: Option<String>,
 ) -> Result<Response, AppError> {
-    let (endpoint, _client, _head) = hub_config(&state, source);
+    let (endpoint, client, head_client) = hub_config(&state, source);
     let repo_id = format!("{org}/{repo}");
     let api_prefix = if source == "ms" {
         "api/v1/models"
@@ -361,7 +366,37 @@ async fn model_api_path_inner(
         url.push_str(&query);
     }
 
-    proxy_json(&state, source, &url).await
+    let token = match source {
+        "ms" => &state.config.modelscope.token,
+        _ => &state.config.huggingface.token,
+    };
+
+    let mut req = if method == Method::HEAD {
+        head_client.head(&url)
+    } else {
+        client.get(&url)
+    };
+
+    if let Some(ref token) = token {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
+    let status = resp.status();
+    let upstream_headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
+        .filter(|(n, _)| *n != "transfer-encoding")
+        .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let body = resp.bytes().await.map_err(|e| AppError::Anyhow(e.into()))?;
+
+    let mut builder = Response::builder().status(status);
+    for (name, value) in &upstream_headers {
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(body.into())
+        .map_err(|e| AppError::Anyhow(e.into()))
 }
 
 // ── File proxy handler (reused by HF and MS) ──
@@ -553,6 +588,21 @@ async fn file_proxy_inner(
             let first_headers = resp.headers();
 
             tracing::info!("HEAD upstream response: status={}", status);
+
+            if !status.is_success() && !status.is_redirection() {
+                let upstream_headers: Vec<(String, String)> = first_headers
+                    .iter()
+                    .filter(|(n, _)| *n != "transfer-encoding")
+                    .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+                let mut builder = Response::builder().status(status);
+                for (name, value) in &upstream_headers {
+                    builder = builder.header(name, value);
+                }
+                return builder
+                    .body(axum::body::Body::empty())
+                    .map_err(|e| AppError::Anyhow(e.into()));
+            }
 
             let x_repo_commit = first_headers
                 .get("x-repo-commit")
@@ -778,6 +828,33 @@ async fn file_proxy_inner(
     }
 
     tracing::info!("cache miss, streaming via upstream: {}", cache_name);
+
+    let mut probe = http_client.get(&url);
+    if let Some(ref ua) = user_agent {
+        probe = probe.header("User-Agent", ua);
+    }
+    let probe_resp = probe.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
+    let probe_status = probe_resp.status();
+    if !probe_status.is_success() && !probe_status.is_redirection() {
+        let upstream_headers: Vec<(String, String)> = probe_resp
+            .headers()
+            .iter()
+            .filter(|(n, _)| *n != "transfer-encoding")
+            .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+            .collect();
+        let body = probe_resp
+            .bytes()
+            .await
+            .map_err(|e| AppError::Anyhow(e.into()))?;
+        let mut builder = Response::builder().status(probe_status);
+        for (name, value) in &upstream_headers {
+            builder = builder.header(name, value);
+        }
+        return builder
+            .body(body.into())
+            .map_err(|e| AppError::Anyhow(e.into()));
+    }
+
     let service = state.service.lock().await;
     let (file, content_length, stream) = service
         .stream_from_upstream(
@@ -949,7 +1026,7 @@ async fn stats(State(state): State<AppState>) -> Result<Json<crate::metadata::St
 
 async fn agent_harnesses(State(state): State<AppState>) -> Result<Response, AppError> {
     let url = format!("{}/api/agent-harnesses", state.config.huggingface.endpoint);
-    proxy_json(&state, "hf", &url).await
+    forward_upstream_response(&state, "hf", &url).await
 }
 
 #[derive(serde::Deserialize)]
@@ -1264,7 +1341,11 @@ async fn control_file_delete(
     }))
 }
 
-async fn proxy_json(state: &AppState, source: &str, url: &str) -> Result<Response, AppError> {
+async fn forward_upstream_response(
+    state: &AppState,
+    source: &str,
+    url: &str,
+) -> Result<Response, AppError> {
     let (_, client, _) = hub_config(state, source);
     let mut req = client.get(url);
     let token = match source {
@@ -1276,10 +1357,19 @@ async fn proxy_json(state: &AppState, source: &str, url: &str) -> Result<Respons
     }
     let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
     let status = resp.status();
-    let body = resp.text().await.map_err(|e| AppError::Anyhow(e.into()))?;
-    Response::builder()
-        .status(status)
-        .header("Content-Type", "application/json")
+    let upstream_headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
+        .filter(|(n, _)| *n != "transfer-encoding")
+        .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let body = resp.bytes().await.map_err(|e| AppError::Anyhow(e.into()))?;
+
+    let mut builder = Response::builder().status(status);
+    for (name, value) in &upstream_headers {
+        builder = builder.header(name, value);
+    }
+    builder
         .body(body.into())
         .map_err(|e| AppError::Anyhow(e.into()))
 }

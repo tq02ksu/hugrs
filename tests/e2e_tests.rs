@@ -216,6 +216,42 @@ async fn mock_model_api_proxy(req: axum::extract::Request) -> Response {
         .unwrap()
 }
 
+async fn mock_notfound_head() -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("Content-Length", "15")
+        .header("X-Repo-Commit", "deadbeef404")
+        .header("X-Error-Code", "EntryNotFound")
+        .header("X-Error-Message", "Entry not found")
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+async fn mock_notfound_get() -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .header("Content-Type", "text/plain; charset=utf-8")
+        .header("Content-Length", "15")
+        .header("X-Repo-Commit", "deadbeef404")
+        .header("X-Error-Code", "EntryNotFound")
+        .header("X-Error-Message", "Entry not found")
+        .body(axum::body::Body::from("Entry not found"))
+        .unwrap()
+}
+
+async fn start_notfound_upstream() -> String {
+    let app = Router::new().route(
+        "/{org}/{repo}/resolve/{revision}/{*path}",
+        head(mock_notfound_head).get(mock_notfound_get),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async { axum::serve(l, app).await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    addr
+}
+
 async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
     let state = MockState {
         data: Arc::new(data),
@@ -995,4 +1031,93 @@ async fn test_control_api_file_delete_without_source_applies_to_all_sources() {
         .get_file_by_name("shared.bin", "ms")
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_404_head_forwards_upstream_status_and_does_not_cache() {
+    let dir = TempDir::new().unwrap();
+    let upstream = start_notfound_upstream().await;
+    let app = build_hugrs_router(&upstream, &dir);
+    let db_path = dir.path().join("http_db");
+
+    use tower::util::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/missing.json")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "HEAD to nonexistent file should return 404"
+    );
+
+    let h = resp.headers();
+    assert_eq!(
+        h.get("x-repo-commit")
+            .and_then(|v| v.to_str().ok())
+            .unwrap(),
+        "deadbeef404",
+        "x-repo-commit should be forwarded from upstream"
+    );
+
+    let store = MetadataStore::new(&db_path).unwrap();
+    assert!(
+        store
+            .get_file_by_name("org/repo/missing.json", "hf")
+            .unwrap()
+            .is_none(),
+        "404 responses must not be cached"
+    );
+}
+
+#[tokio::test]
+async fn test_resolve_404_get_forwards_upstream_status_and_does_not_cache() {
+    let dir = TempDir::new().unwrap();
+    let upstream = start_notfound_upstream().await;
+    let app = build_hugrs_router(&upstream, &dir);
+    let db_path = dir.path().join("http_db");
+
+    use tower::util::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/org/repo/resolve/main/missing.json")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "GET to nonexistent file should return 404"
+    );
+
+    let h = resp.headers();
+    assert_eq!(
+        h.get("x-repo-commit")
+            .and_then(|v| v.to_str().ok())
+            .unwrap(),
+        "deadbeef404",
+        "x-repo-commit should be forwarded from upstream"
+    );
+
+    let body = axum::body::to_bytes(resp.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        body.as_ref(),
+        b"Entry not found",
+        "404 body should be forwarded from upstream"
+    );
+
+    let store = MetadataStore::new(&db_path).unwrap();
+    assert!(
+        store
+            .get_file_by_name("org/repo/missing.json", "hf")
+            .unwrap()
+            .is_none(),
+        "404 responses must not be cached"
+    );
 }
