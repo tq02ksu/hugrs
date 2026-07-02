@@ -2,6 +2,7 @@ use crate::chunker;
 use crate::metadata::{File, MetadataStore, Stats};
 use crate::storage::StorageBackend;
 use bytes::Bytes;
+use reqwest::StatusCode;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -12,6 +13,40 @@ pub const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 pub(crate) fn use_get_for_first_hop_probe(source: &str, url: &str) -> bool {
     source == "ms" && url.contains("/api/v1/models/") && url.contains("/repo?")
+}
+
+fn etags_equivalent(lhs: Option<&str>, rhs: Option<&str>) -> bool {
+    fn normalize(etag: &str) -> &str {
+        etag.trim().trim_start_matches("W/").trim_matches('"')
+    }
+
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => normalize(lhs) == normalize(rhs),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FetchedMetadata {
+    pub size: u64,
+    pub etag: Option<String>,
+    pub content_type: Option<String>,
+    pub x_repo_commit: Option<String>,
+    pub x_linked_size: Option<i64>,
+    pub x_linked_etag: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpstreamHeadFailure {
+    pub status: StatusCode,
+    pub headers: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MetadataProbeResult {
+    Metadata(FetchedMetadata),
+    UpstreamFailure(UpstreamHeadFailure),
 }
 
 pub type ByteStream = ReceiverStream<Result<Bytes, anyhow::Error>>;
@@ -835,8 +870,13 @@ impl CacheService {
         range_end: Option<u64>,
         user_agent: Option<&str>,
     ) -> anyhow::Result<(File, u64, ByteStream)> {
-        self.fetch_file_metadata(url, name, repo, source, user_agent)
-            .await?;
+        let metadata = match self.probe_file_metadata(url, source, user_agent).await? {
+            MetadataProbeResult::Metadata(metadata) => metadata,
+            MetadataProbeResult::UpstreamFailure(failure) => {
+                anyhow::bail!("upstream returned {}", failure.status)
+            }
+        };
+        self.reconcile_fetched_metadata(name, repo, source, metadata)?;
 
         let file = self
             .metadata
@@ -846,21 +886,12 @@ impl CacheService {
             .await
     }
 
-    async fn fetch_file_metadata(
+    pub async fn probe_file_metadata(
         &self,
         url: &str,
-        name: &str,
-        repo: &str,
         source: &str,
         user_agent: Option<&str>,
-    ) -> anyhow::Result<(
-        u64,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-    )> {
+    ) -> anyhow::Result<MetadataProbeResult> {
         let mut req = if use_get_for_first_hop_probe(source, url) {
             self.head_client.get(url)
         } else {
@@ -874,8 +905,15 @@ impl CacheService {
         let status = head_resp.status();
 
         if !status.is_success() && !status.is_redirection() {
-            let body = head_resp.text().await.unwrap_or_default();
-            anyhow::bail!("upstream returned {status}: {body}");
+            let headers = first_headers
+                .iter()
+                .filter(|(n, _)| *n != "transfer-encoding")
+                .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+                .collect();
+            return Ok(MetadataProbeResult::UpstreamFailure(UpstreamHeadFailure {
+                status,
+                headers,
+            }));
         }
 
         let x_repo_commit = first_headers
@@ -948,36 +986,44 @@ impl CacheService {
             anyhow::bail!("cannot determine file size for {url}");
         }
 
-        let existing = self.metadata.get_file_by_name(name, source)?;
-        if existing
-            .as_ref()
-            .map(|f| f.total_size as u64 != size)
-            .unwrap_or(true)
-        {
-            self.metadata.delete_file(name, source)?;
-        }
-        if self.metadata.get_file_by_name(name, source)?.is_none() {
-            self.metadata.add_file(name, repo, size as i64, source)?;
-        }
-        self.metadata.set_file_headers(
-            name,
-            source,
-            etag.as_deref(),
-            x_repo_commit.as_deref(),
-            x_linked_size,
-            x_linked_etag.as_deref(),
-            content_type.as_deref(),
-        )?;
-        self.metadata.touch_repo(repo)?;
-
-        Ok((
+        Ok(MetadataProbeResult::Metadata(FetchedMetadata {
             size,
             etag,
             content_type,
             x_repo_commit,
             x_linked_size,
             x_linked_etag,
-        ))
+        }))
+    }
+
+    async fn fetch_file_metadata(
+        &self,
+        url: &str,
+        _name: &str,
+        _repo: &str,
+        source: &str,
+        user_agent: Option<&str>,
+    ) -> anyhow::Result<(
+        u64,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+    )> {
+        match self.probe_file_metadata(url, source, user_agent).await? {
+            MetadataProbeResult::Metadata(metadata) => Ok((
+                metadata.size,
+                metadata.etag,
+                metadata.content_type,
+                metadata.x_repo_commit,
+                metadata.x_linked_size,
+                metadata.x_linked_etag,
+            )),
+            MetadataProbeResult::UpstreamFailure(failure) => {
+                anyhow::bail!("upstream returned {}", failure.status)
+            }
+        }
     }
 
     pub async fn validate_file_etag(
@@ -1000,6 +1046,66 @@ impl CacheService {
             Some(ref ue) => Ok(ue == cached_etag),
             None => Ok(true),
         }
+    }
+
+    pub async fn reconcile_file_metadata(
+        &self,
+        url: &str,
+        name: &str,
+        repo: &str,
+        source: &str,
+        user_agent: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let metadata = match self.probe_file_metadata(url, source, user_agent).await? {
+            MetadataProbeResult::Metadata(metadata) => metadata,
+            MetadataProbeResult::UpstreamFailure(failure) => {
+                anyhow::bail!("upstream returned {}", failure.status)
+            }
+        };
+        self.reconcile_fetched_metadata(name, repo, source, metadata)
+    }
+
+    pub fn reconcile_fetched_metadata(
+        &self,
+        name: &str,
+        repo: &str,
+        source: &str,
+        metadata: FetchedMetadata,
+    ) -> anyhow::Result<()> {
+        let size = metadata.size;
+        let etag = metadata.etag;
+        let content_type = metadata.content_type;
+        let x_repo_commit = metadata.x_repo_commit;
+        let x_linked_size = metadata.x_linked_size;
+        let x_linked_etag = metadata.x_linked_etag;
+
+        let existing = self.metadata.get_file_by_name(name, source)?;
+        let should_delete = match existing.as_ref() {
+            Some(file) if file.etag.is_none() => true,
+            Some(_) if etag.is_none() => true,
+            Some(file) if !etags_equivalent(file.etag.as_deref(), etag.as_deref()) => true,
+            _ => false,
+        };
+
+        if should_delete {
+            self.metadata.delete_file(name, source)?;
+        }
+
+        if self.metadata.get_file_by_name(name, source)?.is_none() {
+            self.metadata.add_file(name, repo, size as i64, source)?;
+        }
+
+        self.metadata.set_file_headers(
+            name,
+            source,
+            etag.as_deref(),
+            x_repo_commit.as_deref(),
+            x_linked_size,
+            x_linked_etag.as_deref(),
+            content_type.as_deref(),
+        )?;
+        self.metadata.touch_repo(repo)?;
+        Ok(())
     }
 
     // TRANSITIONAL: remove in v0.X.0 ──────────────────────────

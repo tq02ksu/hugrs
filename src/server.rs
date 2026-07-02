@@ -6,7 +6,7 @@ use crate::control::{
 };
 use crate::git;
 use crate::hf;
-use crate::service::CacheService;
+use crate::service::{CacheService, MetadataProbeResult};
 use axum::{
     extract::{OriginalUri, Path, Query, Request, State},
     http::{HeaderMap, Method, StatusCode},
@@ -19,7 +19,23 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
+
+#[derive(Clone)]
+enum MetadataReconcileOutcome {
+    MetadataReady,
+    ForwardHeadFailure {
+        status: StatusCode,
+        headers: Vec<(String, String)>,
+    },
+}
+
+type MetadataReconcileWaiter = oneshot::Sender<anyhow::Result<MetadataReconcileOutcome>>;
+
+#[derive(Default)]
+pub struct MetadataInflight {
+    leaders: HashMap<String, Vec<MetadataReconcileWaiter>>,
+}
 
 pub async fn run(
     mut config: Config,
@@ -38,6 +54,7 @@ pub async fn run(
         head_client: Arc::new(head_client),
         ms_http_client: Arc::new(ms_http_client),
         ms_head_client: Arc::new(ms_head_client),
+        metadata_inflight: Arc::new(Mutex::new(MetadataInflight::default())),
     };
 
     let addr = format!(
@@ -168,6 +185,66 @@ pub struct AppState {
     pub head_client: Arc<reqwest::Client>,
     pub ms_http_client: Arc<reqwest::Client>,
     pub ms_head_client: Arc<reqwest::Client>,
+    pub metadata_inflight: Arc<Mutex<MetadataInflight>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_metadata_singleflight(
+    state: &AppState,
+    service: &CacheService,
+    key: String,
+    url: &str,
+    cache_name: &str,
+    repo_id: &str,
+    source: &str,
+    user_agent: Option<&str>,
+) -> anyhow::Result<MetadataReconcileOutcome> {
+    let rx = {
+        let mut inflight = state.metadata_inflight.lock().await;
+        if let Some(waiters) = inflight.leaders.get_mut(&key) {
+            let (tx, rx) = oneshot::channel();
+            waiters.push(tx);
+            Some(rx)
+        } else {
+            inflight.leaders.insert(key.clone(), Vec::new());
+            None
+        }
+    };
+
+    if let Some(rx) = rx {
+        return rx
+            .await
+            .map_err(|e| anyhow::anyhow!("metadata reconcile waiter dropped: {e}"))?;
+    }
+
+    let result: anyhow::Result<MetadataReconcileOutcome> =
+        match service.probe_file_metadata(url, source, user_agent).await? {
+            MetadataProbeResult::Metadata(metadata) => {
+                service.reconcile_fetched_metadata(cache_name, repo_id, source, metadata)?;
+                Ok(MetadataReconcileOutcome::MetadataReady)
+            }
+            MetadataProbeResult::UpstreamFailure(failure) => {
+                Ok(MetadataReconcileOutcome::ForwardHeadFailure {
+                    status: failure.status,
+                    headers: failure.headers,
+                })
+            }
+        };
+
+    let waiters = {
+        let mut inflight = state.metadata_inflight.lock().await;
+        inflight.leaders.remove(&key).unwrap_or_default()
+    };
+
+    for waiter in waiters {
+        let waiter_result = match &result {
+            Ok(outcome) => Ok(outcome.clone()),
+            Err(e) => Err(anyhow::anyhow!(e.to_string())),
+        };
+        let _ = waiter.send(waiter_result);
+    }
+
+    result
 }
 
 #[derive(Serialize)]
@@ -494,9 +571,10 @@ async fn file_proxy_inner(
     headers: HeaderMap,
     path: String,
     user_agent: Option<String>,
-    first_hop_get: bool,
+    _first_hop_get: bool,
 ) -> Result<Response, AppError> {
-    let (_endpoint, http_client, head_client) = hub_config(&state, source);
+    let (_endpoint, http_client, _head_client) = hub_config(&state, source);
+    let service = { state.service.lock().await.clone() };
     let repo_id = {
         let parts: Vec<&str> = cache_name.splitn(3, '/').collect();
         if parts.len() >= 2 {
@@ -512,209 +590,40 @@ async fn file_proxy_inner(
         .map(ToString::to_string);
 
     if method == Method::HEAD {
-        let proceed_to_upstream;
+        let key = format!("{source}:{cache_name}");
+        match reconcile_metadata_singleflight(
+            &state,
+            &service,
+            key,
+            &url,
+            &cache_name,
+            &repo_id,
+            source,
+            user_agent.as_deref(),
+        )
+        .await
+        .map_err(AppError::from)?
         {
-            let service = state.service.lock().await;
-            if let Ok(Some(file)) = service.info(&cache_name, source).await {
-                if file.x_repo_commit.is_some() {
-                    let should_serve_cached = if let Some(ref cached_etag) = file.etag {
-                        let cached_etag = cached_etag.clone();
-                        drop(service);
-                        match state
-                            .service
-                            .lock()
-                            .await
-                            .validate_file_etag(
-                                &url,
-                                &cache_name,
-                                &repo_id,
-                                source,
-                                user_agent.as_deref(),
-                                &cached_etag,
-                            )
-                            .await
-                        {
-                            Ok(true) => true,
-                            Ok(false) => false,
-                            Err(e) => {
-                                tracing::warn!(
-                                    "HEAD etag validation failed ({}), serving degraded: {}",
-                                    e,
-                                    cache_name
-                                );
-                                true
-                            }
-                        }
-                    } else {
-                        true
-                    };
-
-                    if should_serve_cached {
-                        let service = state.service.lock().await;
-                        if let Ok(Some(file)) = service.info(&cache_name, source).await {
-                            tracing::debug!("HEAD cache hit (metadata): {}", cache_name);
-                            return build_head_response(&file, &path);
-                        }
-                    } else {
-                        let service = state.service.lock().await;
-                        let _ = service.metadata.delete_file(&cache_name, source);
-                        // Fall through to upstream HEAD fetch
-                    }
-                    proceed_to_upstream = false;
-                } else {
-                    tracing::debug!(
-                        "HEAD cache hit but missing x_repo_commit, refreshing from upstream: {}",
-                        cache_name
-                    );
-                    proceed_to_upstream = true;
-                }
-            } else {
-                proceed_to_upstream = true;
-            }
-        } // service lock dropped
-
-        if proceed_to_upstream {
-            tracing::info!("HEAD proxy to upstream: {}", url);
-            let mut req = if first_hop_get {
-                head_client.get(&url)
-            } else {
-                head_client.head(&url)
-            };
-            if let Some(ref ua) = user_agent {
-                req = req.header("User-Agent", ua);
-            }
-            let resp = req.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
-            let status = resp.status();
-            let first_headers = resp.headers();
-
-            tracing::info!("HEAD upstream response: status={}", status);
-
-            if !status.is_success() && !status.is_redirection() {
-                let upstream_headers: Vec<(String, String)> = first_headers
-                    .iter()
-                    .filter(|(n, _)| *n != "transfer-encoding")
-                    .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
-                    .collect();
+            MetadataReconcileOutcome::MetadataReady => {}
+            MetadataReconcileOutcome::ForwardHeadFailure { status, headers } => {
                 let mut builder = Response::builder().status(status);
-                for (name, value) in &upstream_headers {
+                for (name, value) in &headers {
                     builder = builder.header(name, value);
                 }
                 return builder
                     .body(axum::body::Body::empty())
                     .map_err(|e| AppError::Anyhow(e.into()));
             }
+        }
 
-            let x_repo_commit = first_headers
-                .get("x-repo-commit")
-                .and_then(|v| v.to_str().ok())
-                .map(ToString::to_string);
-            let xl_size: Option<i64> = first_headers
-                .get("x-linked-size")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok());
-            let x_linked_etag = first_headers
-                .get("x-linked-etag")
-                .and_then(|v| v.to_str().ok())
-                .map(ToString::to_string);
+        if let Ok(Some(file)) = service.info(&cache_name, source).await {
+            tracing::debug!("HEAD metadata reconciled: {}", cache_name);
+            return build_head_response(&file, &path);
+        }
 
-            let (total_size, etag, content_type) = if status.is_redirection() {
-                let location = first_headers
-                    .get("location")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("");
-                let location = resolve_redirect(&url, location);
-                tracing::info!("HEAD following redirect: {}", location);
-                let mut req2 = http_client.head(location);
-                if let Some(ref ua) = user_agent {
-                    req2 = req2.header("User-Agent", ua);
-                }
-                match req2.send().await {
-                    Ok(resp2) => {
-                        let h = resp2.headers();
-                        let cl: u64 = h
-                            .get("content-length")
-                            .and_then(|v| v.to_str().ok())
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(0);
-                        let et = h
-                            .get("etag")
-                            .and_then(|v| v.to_str().ok())
-                            .map(ToString::to_string);
-                        let ct = h
-                            .get("content-type")
-                            .and_then(|v| v.to_str().ok())
-                            .map(ToString::to_string);
-                        (cl, et, ct)
-                    }
-                    Err(e) => {
-                        tracing::warn!("HEAD redirect failed: {}", e);
-                        (0u64, None, None)
-                    }
-                }
-            } else {
-                let cl: u64 = first_headers
-                    .get("content-length")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(0);
-                let et = first_headers
-                    .get("etag")
-                    .and_then(|v| v.to_str().ok())
-                    .map(ToString::to_string);
-                let ct = first_headers
-                    .get("content-type")
-                    .and_then(|v| v.to_str().ok())
-                    .map(ToString::to_string);
-                (cl, et, ct)
-            };
-
-            let size = if total_size > 0 {
-                total_size
-            } else {
-                xl_size.unwrap_or(0) as u64
-            };
-
-            if size > 0 {
-                let service = state.service.lock().await;
-                let _ = service.ensure_file_headers(
-                    &cache_name,
-                    &repo_id,
-                    source,
-                    size,
-                    etag.as_deref(),
-                    x_repo_commit.as_deref(),
-                    xl_size,
-                    x_linked_etag.as_deref(),
-                    content_type.as_deref(),
-                );
-                tracing::info!("cached HEAD metadata for {} ({} bytes)", cache_name, size);
-            }
-
-            let mut builder = Response::builder().status(StatusCode::OK);
-            if let Some(ref ct) = content_type {
-                builder = builder.header("Content-Type", ct.as_str());
-            }
-            if size > 0 {
-                builder = builder.header("Content-Length", size);
-            }
-            builder = builder.header("Accept-Ranges", "bytes");
-            if let Some(ref et) = etag {
-                builder = builder.header("ETag", et.as_str());
-            }
-            if let Some(ref commit) = x_repo_commit {
-                builder = builder.header("X-Repo-Commit", commit.as_str());
-            }
-            if let Some(sz) = xl_size {
-                builder = builder.header("X-Linked-Size", sz);
-            }
-            if let Some(ref le) = x_linked_etag {
-                builder = builder.header("X-Linked-ETag", le.as_str());
-            }
-            tracing::info!("HEAD returning 200 (size={})", size);
-            return builder
-                .body(axum::body::Body::empty())
-                .map_err(|e| AppError::Anyhow(e.into()));
-        } // end if proceed_to_upstream
+        return Err(AppError::Anyhow(anyhow::anyhow!(
+            "metadata reconcile completed without persisted file: {cache_name}"
+        )));
     }
 
     // GET

@@ -78,6 +78,11 @@ cargo build --release
   - `docs/CONFIG.md` ↔ `docs/CONFIG_zh.md`
   - `docs/CLI.md` ↔ `docs/CLI_zh.md`
   When modifying either file in a pair, sync the same change to its counterpart.
+- **Protocol and interface design reference**:
+  - When designing or reviewing upstream-facing APIs, file routes, metadata behavior, redirects, auth/header forwarding, or client compatibility logic, consult `docs/protocol/` first.
+  - Treat the provider notes in `docs/protocol/huggingface.md` and `docs/protocol/modelscope.md` as the protocol baseline unless the code, trace evidence, or changelog proves they need to be updated.
+  - If a feature change modifies upstream protocol behavior, external interfaces, or client usage modes, update the relevant file under `docs/protocol/` as needed and keep the document content consistent with the implementation.
+  - Do not land an implementation that conflicts with the documented client-visible behavior in `docs/protocol/huggingface.md` or `docs/protocol/modelscope.md` unless the same change also updates those documents.
 - **Config responsibility split**:
   - `clap` parses daemon and management CLI arguments.
   - `dotenvy` loads `.env` into the process environment.

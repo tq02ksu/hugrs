@@ -107,6 +107,7 @@ async fn seed_incomplete_file(
 #[derive(Clone)]
 struct MockState {
     data: Arc<Vec<u8>>,
+    head_count: Arc<AtomicU32>,
     get_count: Arc<AtomicU32>,
     ms_repo_get_count: Arc<AtomicU32>,
     ms_cdn_get_count: Arc<AtomicU32>,
@@ -120,7 +121,9 @@ fn record_user_agent(state: &MockState, headers: &HeaderMap) {
 }
 
 async fn mock_head(State(s): State<MockState>, headers: HeaderMap) -> Response {
+    s.head_count.fetch_add(1, Ordering::SeqCst);
     record_user_agent(&s, &headers);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     Response::builder()
         .status(StatusCode::OK)
@@ -188,6 +191,7 @@ async fn mock_ms_repo_get(State(s): State<MockState>, headers: HeaderMap) -> Res
 
 async fn mock_ms_cdn_head(State(s): State<MockState>, headers: HeaderMap) -> Response {
     record_user_agent(&s, &headers);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     Response::builder()
         .status(StatusCode::OK)
@@ -290,9 +294,29 @@ async fn start_notfound_upstream() -> String {
     addr
 }
 
+async fn start_slow_notfound_upstream() -> String {
+    let app = Router::new().route(
+        "/{org}/{repo}/resolve/{revision}/{*path}",
+        head(|| async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            mock_notfound_head().await
+        })
+        .get(|| async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            mock_notfound_get().await
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async { axum::serve(l, app).await.unwrap() });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    addr
+}
+
 async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
     let state = MockState {
         data: Arc::new(data),
+        head_count: Arc::new(AtomicU32::new(0)),
         get_count: Arc::new(AtomicU32::new(0)),
         ms_repo_get_count: Arc::new(AtomicU32::new(0)),
         ms_cdn_get_count: Arc::new(AtomicU32::new(0)),
@@ -318,6 +342,7 @@ async fn start_upstream(data: Vec<u8>) -> (String, MockState) {
 async fn start_ms_upstream(data: Vec<u8>) -> (String, MockState) {
     let state = MockState {
         data: Arc::new(data),
+        head_count: Arc::new(AtomicU32::new(0)),
         get_count: Arc::new(AtomicU32::new(0)),
         ms_repo_get_count: Arc::new(AtomicU32::new(0)),
         ms_cdn_get_count: Arc::new(AtomicU32::new(0)),
@@ -427,6 +452,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
                 .build()
                 .unwrap(),
         ),
+        metadata_inflight: Arc::new(TokioMutex::new(Default::default())),
     };
 
     hugrs::server::app_router(state)
@@ -704,6 +730,39 @@ async fn test_ms_repo_second_get_uses_cache() {
 }
 
 #[tokio::test]
+async fn test_modelscope_reconcile_uses_first_hop_get() {
+    let test_data = b"modelscope reconcile body".to_vec();
+    let (upstream, state) = start_ms_upstream(test_data).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let uri = "/ms/api/v1/models/Qwen/Qwen3-Embedding-0.6B/repo?Revision=master&FilePath=model.safetensors";
+    let req = axum::http::Request::builder()
+        .method("HEAD")
+        .uri(uri)
+        .header("User-Agent", "ua-ms-reconcile-head/1.0")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(state.ms_repo_get_count.load(Ordering::SeqCst), 1);
+    assert_eq!(state.ms_cdn_get_count.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        resp.headers()
+            .get("x-linked-etag")
+            .and_then(|v| v.to_str().ok()),
+        Some("mock-linked-etag")
+    );
+    assert_eq!(
+        resp.headers().get("etag").and_then(|v| v.to_str().ok()),
+        Some("\"mock-ms-etag\"")
+    );
+}
+
+#[tokio::test]
 async fn test_ms_repo_stale_small_cache_refreshes_on_valid_range() {
     let test_data = vec![9u8; CHUNK_SIZE + 1024];
     let (upstream, state) = start_ms_upstream(test_data.clone()).await;
@@ -800,6 +859,76 @@ async fn test_small_file_cache_hit_preserves_headers() {
         get2.headers().get("x-repo-commit").is_some(),
         "second GET (cache hit) should return x-repo-commit"
     );
+}
+
+#[tokio::test]
+async fn test_concurrent_head_requests_share_one_upstream_probe() {
+    let test_data: Vec<u8> = b"head concurrency payload".to_vec();
+    let (upstream, state) = start_upstream(test_data).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let req1 = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/cfg.json")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let req2 = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/cfg.json")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let (resp1, resp2) = tokio::join!(app.clone().oneshot(req1), app.oneshot(req2));
+    let resp1 = resp1.unwrap();
+    let resp2 = resp2.unwrap();
+
+    assert!(resp1.status().is_success());
+    assert!(resp2.status().is_success());
+    assert_eq!(state.head_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn test_metadata_reconcile_failure_releases_waiters() {
+    let upstream = start_slow_notfound_upstream().await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+
+    let req1 = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/missing.bin")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let req2 = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/missing.bin")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let (resp1, resp2) = tokio::join!(app.clone().oneshot(req1), app.clone().oneshot(req2));
+    let resp1 = resp1.unwrap();
+    let resp2 = resp2.unwrap();
+
+    assert_eq!(resp1.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp2.status(), StatusCode::NOT_FOUND);
+
+    let good_data: Vec<u8> = b"retry after failure".to_vec();
+    let (good_upstream, state) = start_upstream(good_data).await;
+    let app = build_hugrs_router(&good_upstream, &dir);
+
+    let req3 = axum::http::Request::builder()
+        .method("HEAD")
+        .uri("/org/repo/resolve/main/missing.bin")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp3 = app.oneshot(req3).await.unwrap();
+
+    assert_eq!(resp3.status(), StatusCode::OK);
+    assert_eq!(state.head_count.load(Ordering::SeqCst), 1);
 }
 
 async fn start_redirect_upstream(data: Vec<u8>) -> (String,) {

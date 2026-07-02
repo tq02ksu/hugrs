@@ -210,6 +210,7 @@ fn build_git_router(upstream: &str, ms_upstream: Option<&str>, dir: &TempDir) ->
                 .build()
                 .unwrap(),
         ),
+        metadata_inflight: Arc::new(TokioMutex::new(Default::default())),
     };
 
     Router::new()
@@ -328,6 +329,7 @@ fn build_git_router_with_token(
                 .build()
                 .unwrap(),
         ),
+        metadata_inflight: Arc::new(TokioMutex::new(Default::default())),
     };
 
     Router::new()
@@ -1197,6 +1199,7 @@ async fn test_git_info_refs_ms_uses_separate_upstream() {
                 .build()
                 .unwrap(),
         ),
+        metadata_inflight: Arc::new(TokioMutex::new(Default::default())),
     };
 
     let app = Router::new()
