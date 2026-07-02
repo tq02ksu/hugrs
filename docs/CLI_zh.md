@@ -34,8 +34,8 @@ hugrs --local-root /data/chunks
 
 默认 admin token 文件：
 
-- macOS：`~/Library/Caches/hugrs/admin.token`
-- Linux：`~/.cache/hugrs/admin.token`
+- macOS：`~/Library/Application Support/hugrs/admin.token`
+- Linux：`~/.local/share/hugrs/admin.token`
 
 ## 资源模型
 

@@ -1,3 +1,4 @@
+use crate::config::default_admin_token_file_path;
 use crate::control::{
     DeleteResponse, FileListResponse, FileShowResponse, GcPreviewResponse, GcRequest,
     GcResultResponse, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
@@ -160,8 +161,7 @@ fn resolve_admin_token(admin_token_override: Option<String>) -> anyhow::Result<S
 }
 
 fn default_admin_token_file() -> PathBuf {
-    let cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("."));
-    cache.join("hugrs").join("admin.token")
+    default_admin_token_file_path()
 }
 
 fn default_control_endpoint() -> String {
@@ -178,6 +178,7 @@ fn with_source(path: &str, source: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::AdminClient;
+    use crate::config::default_admin_token_file_path;
 
     #[test]
     fn discover_uses_explicit_endpoint_and_token() {
@@ -200,5 +201,13 @@ mod tests {
             Err(err) => panic!("discover should fall back to default endpoint: {err}"),
         };
         assert_eq!(client.base_url, "http://127.0.0.1:3000");
+    }
+
+    #[test]
+    fn default_admin_token_path_matches_daemon_default() {
+        assert_eq!(
+            super::default_admin_token_file(),
+            default_admin_token_file_path()
+        );
     }
 }

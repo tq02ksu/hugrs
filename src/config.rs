@@ -134,29 +134,47 @@ fn default_backend() -> String {
     "local".into()
 }
 
-fn default_cache_base() -> PathBuf {
-    let cache = dirs::cache_dir().unwrap_or_else(|| {
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".cache")
-    });
-    if cache.is_relative() {
-        std::env::current_dir().unwrap_or_default().join(cache)
+fn app_config_dir() -> PathBuf {
+    app_dir(dirs::config_dir().unwrap_or_else(|| fallback_home_dir(&[".config"])))
+}
+
+fn app_data_dir() -> PathBuf {
+    app_dir(dirs::data_local_dir().unwrap_or_else(|| fallback_home_dir(&[".local", "share"])))
+}
+
+fn app_dir(base: PathBuf) -> PathBuf {
+    if base.is_relative() {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join(base)
+            .join("hugrs")
     } else {
-        cache
+        base.join("hugrs")
     }
 }
 
+fn fallback_home_dir(segments: &[&str]) -> PathBuf {
+    let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    for segment in segments {
+        path.push(segment);
+    }
+    path
+}
+
 fn default_local_root() -> PathBuf {
-    default_cache_base().join("hugrs").join("chunks")
+    app_data_dir().join("chunks")
 }
 
 fn default_db_path() -> PathBuf {
-    default_cache_base().join("hugrs").join("hugrs.db")
+    app_data_dir().join("hugrs.db")
 }
 
 fn default_admin_token_file() -> PathBuf {
-    default_cache_base().join("hugrs").join("admin.token")
+    default_admin_token_file_path()
+}
+
+pub(crate) fn default_admin_token_file_path() -> PathBuf {
+    app_data_dir().join("admin.token")
 }
 
 fn default_host() -> String {
@@ -451,14 +469,11 @@ fn config_paths(overrides: &CliOverrides) -> Vec<String> {
         return vec![path.clone()];
     }
 
-    let home_config = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".config")
-        .join("hugrs")
-        .join("hugrs.toml");
+    let home_config = app_config_dir().join("hugrs.toml");
     vec![
         "hugrs.toml".to_string(),
         home_config.to_string_lossy().to_string(),
+        "/etc/hugrs/hugrs.toml".to_string(),
     ]
 }
 
@@ -698,4 +713,61 @@ fn ms_is_empty(value: &MsPatch) -> bool {
         value.timeout_secs.is_some(),
         value.connect_timeout_secs.is_some(),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        app_config_dir, app_data_dir, config_paths, default_admin_token_file_path, default_db_path,
+        default_local_root,
+    };
+
+    #[test]
+    fn default_db_path_uses_data_dir() {
+        let data_dir = app_data_dir();
+        let db_path = default_db_path();
+
+        assert!(db_path.starts_with(&data_dir));
+        assert_eq!(
+            db_path.file_name().and_then(|value| value.to_str()),
+            Some("hugrs.db")
+        );
+    }
+
+    #[test]
+    fn default_admin_token_path_uses_data_dir() {
+        let data_dir = app_data_dir();
+        let token_path = default_admin_token_file_path();
+
+        assert!(token_path.starts_with(&data_dir));
+        assert_eq!(
+            token_path.file_name().and_then(|value| value.to_str()),
+            Some("admin.token")
+        );
+    }
+
+    #[test]
+    fn default_local_root_uses_data_dir() {
+        let data_dir = app_data_dir();
+        let local_root = default_local_root();
+
+        assert!(local_root.starts_with(&data_dir));
+        assert_eq!(
+            local_root.file_name().and_then(|value| value.to_str()),
+            Some("chunks")
+        );
+    }
+
+    #[test]
+    fn config_paths_include_platform_config_location() {
+        let config_dir = app_config_dir();
+        let paths = config_paths(&super::CliOverrides::default());
+
+        assert!(paths.iter().any(|path| path == "hugrs.toml"));
+        assert!(paths
+            .iter()
+            .any(|path| path == &config_dir.join("hugrs.toml").display().to_string()));
+        assert!(paths.iter().any(|path| path == "/etc/hugrs/hugrs.toml"));
+        assert_eq!(paths[2], "/etc/hugrs/hugrs.toml");
+    }
 }

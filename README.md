@@ -130,6 +130,11 @@ docker run --rm --gpus all -p 8002:80 \
 
 ## Storage Layout
 
+Default local runtime data uses the platform data directory:
+
+- macOS: `~/Library/Application Support/hugrs/chunks`
+- Linux: `~/.local/share/hugrs/chunks`
+
 4MB chunks, SHA256-addressed:
 
 ```
@@ -144,8 +149,18 @@ Management defaults:
 
 - control API namespace: `/_hugrs/...`
 - admin token file:
-  macOS: `~/Library/Caches/hugrs/admin.token`
-  Linux: `~/.cache/hugrs/admin.token`
+  macOS: `~/Library/Application Support/hugrs/admin.token`
+  Linux: `~/.local/share/hugrs/admin.token`
+
+Other default runtime paths:
+
+- config file:
+  macOS: `~/Library/Application Support/hugrs/hugrs.toml`
+  Linux: `~/.config/hugrs/hugrs.toml`
+  system-wide: `/etc/hugrs/hugrs.toml`
+- metadata DB:
+  macOS: `~/Library/Application Support/hugrs/hugrs.db`
+  Linux: `~/.local/share/hugrs/hugrs.db`
 
 `hugrsctl` defaults to `http://127.0.0.1:3000`. Override the server address with `--endpoint` or `HUGRS_CONTROL_ENDPOINT`. The admin token is resolved from `--admin-token`, `HUGRS_ADMIN_TOKEN`, or the default token file for the current platform. Delete removes file-cache references; `hugrsctl service gc` performs batched orphan chunk reclamation.
 

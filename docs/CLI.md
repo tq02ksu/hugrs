@@ -34,8 +34,8 @@ Configuration precedence is documented in [CONFIG.md](CONFIG.md).
 
 Default admin token file:
 
-- macOS: `~/Library/Caches/hugrs/admin.token`
-- Linux: `~/.cache/hugrs/admin.token`
+- macOS: `~/Library/Application Support/hugrs/admin.token`
+- Linux: `~/.local/share/hugrs/admin.token`
 
 ## Resource Model
 

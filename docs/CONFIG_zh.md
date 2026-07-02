@@ -9,10 +9,15 @@
 （最低）                                                        （最高）
 ```
 
-默认缓存目录：
+默认运行目录：
 
-- macOS：`~/Library/Caches`
-- Linux：`~/.cache`
+- 配置文件：
+  macOS：`~/Library/Application Support/hugrs/hugrs.toml`
+  Linux：`~/.config/hugrs/hugrs.toml`
+  系统级：`/etc/hugrs/hugrs.toml`
+- 持久数据：
+  macOS：`~/Library/Application Support/hugrs`
+  Linux：`~/.local/share/hugrs`
 
 ## 各组件职责
 
@@ -29,7 +34,7 @@
 | 方式 | 格式 | 说明 |
 |------|------|------|
 | 默认值 | — | 开箱即用，无需任何配置 |
-| `hugrs.toml` | TOML | 先找 `./hugrs.toml`，没有则找 `~/.config/hugrs/hugrs.toml` |
+| `hugrs.toml` | TOML | 先找 `./hugrs.toml`，再找平台用户配置路径，最后找 `/etc/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | 当前目录下的环境文件 |
 | 环境变量 | `HUGRS_*` | 系统环境变量 |
 | `hugrs` 参数 | `--xxx` | 守护进程启动覆盖项，例如 `--config`、`--server-port` |
@@ -60,7 +65,7 @@ hugrs --max-size 10737418240
 | 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
 |--------|------|--------|----------|------|
 | `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | 存储后端：`local` 或 `s3` |
-| `local_root` | path | `$CACHE_DIR/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | 本地存储根目录。macOS 默认：`~/Library/Caches/hugrs/chunks`；Linux 默认：`~/.cache/hugrs/chunks` |
+| `local_root` | path | `$DATA_DIR/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | 本地存储根目录。macOS 默认：`~/Library/Application Support/hugrs/chunks`；Linux 默认：`~/.local/share/hugrs/chunks` |
 | `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | S3 bucket 名称（backend=s3 时必填） |
 | `s3_region` | string | — | `HUGRS_S3_REGION` | S3 区域（backend=s3 时必填） |
 | `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | S3 key 前缀，如 `"hugrs/cache"` |
@@ -75,7 +80,7 @@ hugrs --max-size 10737418240
 
 | 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
 |--------|------|--------|----------|------|
-| `path` | path | `$CACHE_DIR/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite 数据库文件路径。macOS 默认：`~/Library/Caches/hugrs/hugrs.db`；Linux 默认：`~/.cache/hugrs/hugrs.db` |
+| `path` | path | `$DATA_DIR/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite 数据库文件路径。macOS 默认：`~/Library/Application Support/hugrs/hugrs.db`；Linux 默认：`~/.local/share/hugrs/hugrs.db` |
 
 ### `[server]` — HTTP 服务配置
 
@@ -89,7 +94,7 @@ hugrs --max-size 10737418240
 | 配置项 | 类型 | 默认值 | 环境变量 | 说明 |
 |--------|------|--------|----------|------|
 | `token` | string | 自动生成 | `HUGRS_ADMIN_TOKEN` | `/_hugrs` 管理 API 的固定 admin token |
-| `token_file` | path | `$CACHE_DIR/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | admin token 文件。macOS 默认：`~/Library/Caches/hugrs/admin.token`；Linux 默认：`~/.cache/hugrs/admin.token` |
+| `token_file` | path | `$DATA_DIR/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | admin token 文件。macOS 默认：`~/Library/Application Support/hugrs/admin.token`；Linux 默认：`~/.local/share/hugrs/admin.token` |
 
 ### `[huggingface]` — HuggingFace Hub 配置
 
@@ -121,10 +126,10 @@ hugrs --max-size 10737418240
 # hugrs.toml
 [storage]
 backend = "local"
-local_root = "~/.cache/hugrs/chunks"
+local_root = "~/.local/share/hugrs/chunks"
 
 [database]
-path = "~/.cache/hugrs/hugrs.db"
+path = "~/.local/share/hugrs/hugrs.db"
 
 [server]
 host = "127.0.0.1"

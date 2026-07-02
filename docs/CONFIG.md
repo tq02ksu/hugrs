@@ -9,10 +9,15 @@ defaults  →  hugrs.toml  →  .env  →  env vars  →  hugrs flags
 (lowest)                                                    (highest)
 ```
 
-Default cache directory:
+Default runtime directories:
 
-- macOS: `~/Library/Caches`
-- Linux: `~/.cache`
+- config file:
+  macOS: `~/Library/Application Support/hugrs/hugrs.toml`
+  Linux: `~/.config/hugrs/hugrs.toml`
+  system-wide: `/etc/hugrs/hugrs.toml`
+- persistent data:
+  macOS: `~/Library/Application Support/hugrs`
+  Linux: `~/.local/share/hugrs`
 
 ## Source Responsibilities
 
@@ -29,7 +34,7 @@ The actual design choice is whether merge precedence is implemented manually or 
 | Method | Format | Notes |
 |--------|--------|-------|
 | Defaults | — | Works out of the box |
-| `hugrs.toml` | TOML | Tries `./hugrs.toml`, then `~/.config/hugrs/hugrs.toml` |
+| `hugrs.toml` | TOML | Tries `./hugrs.toml`, then the platform user config path, then `/etc/hugrs/hugrs.toml` |
 | `.env` | KEY=VALUE | Environment file in the current directory |
 | Env vars | `HUGRS_*` | System environment variables |
 | `hugrs` flags | `--xxx` | Daemon startup overrides such as `--config` or `--server-port` |
@@ -60,7 +65,7 @@ hugrs --max-size 10737418240
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `backend` | string | `"local"` | `HUGRS_STORAGE_BACKEND` | Storage backend: `local` or `s3` |
-| `local_root` | path | `$CACHE_DIR/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | Local storage root directory. macOS default: `~/Library/Caches/hugrs/chunks`; Linux default: `~/.cache/hugrs/chunks` |
+| `local_root` | path | `$DATA_DIR/hugrs/chunks` | `HUGRS_LOCAL_ROOT` | Local storage root directory. macOS default: `~/Library/Application Support/hugrs/chunks`; Linux default: `~/.local/share/hugrs/chunks` |
 | `s3_bucket` | string | — | `HUGRS_S3_BUCKET` | S3 bucket name (required for `backend=s3`) |
 | `s3_region` | string | — | `HUGRS_S3_REGION` | S3 region (required for `backend=s3`) |
 | `s3_prefix` | string | — | `HUGRS_S3_PREFIX` | S3 key prefix, e.g. `"hugrs/cache"` |
@@ -75,7 +80,7 @@ hugrs --max-size 10737418240
 
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
-| `path` | path | `$CACHE_DIR/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite database path. macOS default: `~/Library/Caches/hugrs/hugrs.db`; Linux default: `~/.cache/hugrs/hugrs.db` |
+| `path` | path | `$DATA_DIR/hugrs/hugrs.db` | `HUGRS_DB_PATH` | SQLite database path. macOS default: `~/Library/Application Support/hugrs/hugrs.db`; Linux default: `~/.local/share/hugrs/hugrs.db` |
 
 ### `[server]` — HTTP Server
 
@@ -89,7 +94,7 @@ hugrs --max-size 10737418240
 | Key | Type | Default | Env Var | Description |
 |-----|------|---------|---------|-------------|
 | `token` | string | auto-generated | `HUGRS_ADMIN_TOKEN` | Fixed admin token for `/_hugrs` APIs |
-| `token_file` | path | `$CACHE_DIR/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | Admin token file. macOS default: `~/Library/Caches/hugrs/admin.token`; Linux default: `~/.cache/hugrs/admin.token` |
+| `token_file` | path | `$DATA_DIR/hugrs/admin.token` | `HUGRS_ADMIN_TOKEN_FILE` | Admin token file. macOS default: `~/Library/Application Support/hugrs/admin.token`; Linux default: `~/.local/share/hugrs/admin.token` |
 
 ### `[huggingface]` — HuggingFace Hub
 
@@ -121,10 +126,10 @@ hugrs --max-size 10737418240
 # hugrs.toml
 [storage]
 backend = "local"
-local_root = "~/.cache/hugrs/chunks"
+local_root = "~/.local/share/hugrs/chunks"
 
 [database]
-path = "~/.cache/hugrs/hugrs.db"
+path = "~/.local/share/hugrs/hugrs.db"
 
 [server]
 host = "127.0.0.1"

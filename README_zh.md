@@ -46,6 +46,28 @@ hugrsctl service gc --dry-run
 
 [📖 CLI 详细文档 →](docs/CLI_zh.md)
 
+## 运行目录
+
+默认本地运行数据使用平台持久数据目录：
+
+- macOS：`~/Library/Application Support/hugrs/chunks`
+- Linux：`~/.local/share/hugrs/chunks`
+
+默认控制面 token 文件：
+
+- macOS：`~/Library/Application Support/hugrs/admin.token`
+- Linux：`~/.local/share/hugrs/admin.token`
+
+其它默认运行路径：
+
+- 配置文件：
+  macOS：`~/Library/Application Support/hugrs/hugrs.toml`
+  Linux：`~/.config/hugrs/hugrs.toml`
+  系统级：`/etc/hugrs/hugrs.toml`
+- 元数据数据库：
+  macOS：`~/Library/Application Support/hugrs/hugrs.db`
+  Linux：`~/.local/share/hugrs/hugrs.db`
+
 ## 客户端使用
 
 HugRS 作为透明代理运行，通过环境变量即可接入常用下载工具。
