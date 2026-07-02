@@ -51,7 +51,7 @@ cargo test
 cargo clippy --all-features
 
 # Format
-cargo fmt -- --check
+cargo fmt
 
 # Release build
 cargo build --release
@@ -93,7 +93,7 @@ cargo build --release
 
 - Before creating any commit, run the relevant verification commands for the change and confirm they pass.
 - For Rust code changes, the default pre-commit quality gates are:
-  - `cargo fmt -- --check`
+  - `cargo fmt`
   - `cargo clippy --all-features`
   - `cargo test`
 - During iteration, targeted tests are acceptable for faster feedback, but do not commit until the full required checks for the touched area have passed.
@@ -107,7 +107,7 @@ cargo build --release
   1. Summarize the changes since the previous version and write them into `CHANGELOG.md`.
   2. Re-review the implementation against the changelog and fix any incomplete design or release details first.
   3. If nothing else is missing, run the quality gates:
-     - `cargo fmt -- --check`
+     - `cargo fmt`
      - `cargo clippy --all-features`
      - `cargo test`
   4. Only after the checks pass, bump the version in `Cargo.toml`.

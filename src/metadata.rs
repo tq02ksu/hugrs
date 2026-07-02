@@ -210,10 +210,7 @@ impl MetadataStore {
         }
     }
 
-    fn delete_file_by_id_tx(
-        tx: &rusqlite::Transaction<'_>,
-        file_id: i64,
-    ) -> anyhow::Result<()> {
+    fn delete_file_by_id_tx(tx: &rusqlite::Transaction<'_>, file_id: i64) -> anyhow::Result<()> {
         let mut stmt = tx.prepare("SELECT sha256 FROM file_chunks WHERE file_id = ?1")?;
         let chunks: Vec<String> = stmt
             .query_map(params![file_id], |row| row.get::<_, String>(0))?

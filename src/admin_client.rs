@@ -1,8 +1,8 @@
 use crate::config::default_admin_token_file_path;
 use crate::control::{
     DeleteResponse, FileListResponse, FileShowResponse, GcPreviewResponse, GcRequest,
-    GcResultResponse, ReconsileRequest, ReconsileResponse, RepoListResponse,
-    RepoShowResponse, ServiceStatsResponse, ServiceStatusResponse,
+    GcResultResponse, ReconsileRequest, ReconsileResponse, RepoListResponse, RepoShowResponse,
+    ServiceStatsResponse, ServiceStatusResponse,
 };
 use std::path::PathBuf;
 
@@ -45,7 +45,7 @@ impl AdminClient {
                 batch_size: None,
             },
         )
-            .await
+        .await
     }
 
     pub async fn service_gc_execute(&self) -> anyhow::Result<GcResultResponse> {

@@ -1,8 +1,8 @@
 use crate::admin_client::AdminClient;
 use crate::control::{
     DeleteResponse, FileListItem, FileListResponse, FileShowResponse, GcPreviewResponse,
-    GcResultResponse, ReconsileResponse, RepoListResponse, RepoShowResponse,
-    ServiceStatsResponse, ServiceStatusResponse,
+    GcResultResponse, ReconsileResponse, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
+    ServiceStatusResponse,
 };
 use clap::{Args, Parser, Subcommand};
 

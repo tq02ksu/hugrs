@@ -2,8 +2,8 @@ use crate::config::Config;
 use crate::control::{
     AuthInfo, CacheInfo, DeleteResponse, FileListItem, FileListResponse, FileShowResponse,
     GcPreviewResponse, GcRequest, GcResultResponse, ReconsileRequest, ReconsileResponse,
-    RepoListItem, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
-    ServiceStatusResponse, SourceInfo, SourcesInfo,
+    RepoListItem, RepoListResponse, RepoShowResponse, ServiceStatsResponse, ServiceStatusResponse,
+    SourceInfo, SourcesInfo,
 };
 use crate::git;
 use crate::hf;

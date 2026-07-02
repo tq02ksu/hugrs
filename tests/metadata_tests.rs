@@ -160,7 +160,9 @@ fn test_reconsile_chunk_refs_dry_run_reports_without_mutating() {
     let store = MetadataStore::new(&db_path).unwrap();
 
     let file = store.add_file("f.bin", "repo", 100, "hf").unwrap();
-    store.ensure_chunk("sha-a", "local", "sh/a", 100, 100).unwrap();
+    store
+        .ensure_chunk("sha-a", "local", "sh/a", 100, 100)
+        .unwrap();
     store.link_file_chunk(file.id, "sha-a", 0, 100).unwrap();
 
     {
@@ -185,7 +187,9 @@ fn test_reconsile_chunk_refs_apply_repairs_refcount_and_orphan_state() {
     let store = MetadataStore::new(&db_path).unwrap();
 
     let file = store.add_file("f.bin", "repo", 100, "hf").unwrap();
-    store.ensure_chunk("sha-a", "local", "sh/a", 100, 100).unwrap();
+    store
+        .ensure_chunk("sha-a", "local", "sh/a", 100, 100)
+        .unwrap();
     store.link_file_chunk(file.id, "sha-a", 0, 100).unwrap();
     store.mark_chunk_orphaned("sha-a").unwrap();
 
@@ -240,7 +244,11 @@ fn test_delete_file_transaction_rolls_back_on_failure() {
     assert_eq!(chunk.orphaned_at, None, "orphan marker should roll back");
 
     let links = store.get_file_chunks(file.unwrap().id).unwrap();
-    assert_eq!(links.len(), 1, "file_chunks should still exist after rollback");
+    assert_eq!(
+        links.len(),
+        1,
+        "file_chunks should still exist after rollback"
+    );
 }
 
 #[test]
