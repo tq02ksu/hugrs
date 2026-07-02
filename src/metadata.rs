@@ -528,7 +528,7 @@ impl MetadataStore {
             |row| row.get(0),
         )?;
         let stored_bytes: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(COALESCE(compressed_size, size)), 0) FROM chunks",
+            "SELECT COALESCE(SUM(COALESCE(compressed_size, size)), 0) FROM chunks WHERE ref_count > 0",
             [],
             |row| row.get(0),
         )?;

@@ -113,14 +113,42 @@ fn test_stats() {
     assert_eq!(stats.bytes_saved, 0);
     assert_eq!(stats.saved_percent, 0.0);
 
-    store.add_file("f.bin", "r", 500, "upload").unwrap();
+    let file = store.add_file("f.bin", "r", 500, "upload").unwrap();
     store.ensure_chunk("s1", "local", "s/1", 500, 500).unwrap();
+    store.link_file_chunk(file.id, "s1", 0, 500).unwrap();
 
     let stats = store.get_stats().unwrap();
     assert_eq!(stats.file_count, 1);
     assert_eq!(stats.repo_count, 1);
     assert_eq!(stats.original_bytes, 500);
     assert_eq!(stats.stored_bytes, 500);
+    assert_eq!(stats.bytes_saved, 0);
+    assert_eq!(stats.saved_percent, 0.0);
+}
+
+#[test]
+fn test_stats_ignores_orphan_chunks() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    let file = store.add_file("f.bin", "r", 1000, "upload").unwrap();
+    store.ensure_chunk("s1", "local", "s/1", 500, 400).unwrap();
+    store.ensure_chunk("s2", "local", "s/2", 500, 400).unwrap();
+    store.link_file_chunk(file.id, "s1", 0, 500).unwrap();
+    store.link_file_chunk(file.id, "s2", 1, 500).unwrap();
+
+    let stats = store.get_stats().unwrap();
+    assert_eq!(stats.file_count, 1);
+    assert_eq!(stats.original_bytes, 1000);
+    assert_eq!(stats.stored_bytes, 800);
+
+    store.delete_file("f.bin", "upload").unwrap();
+
+    let stats = store.get_stats().unwrap();
+    assert_eq!(stats.file_count, 0);
+    assert_eq!(stats.original_bytes, 0);
+    assert_eq!(stats.stored_bytes, 0);
     assert_eq!(stats.bytes_saved, 0);
     assert_eq!(stats.saved_percent, 0.0);
 }
