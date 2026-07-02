@@ -507,3 +507,42 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
     assert!(result.reclaimed_bytes > 0);
     assert!(!service.backend_exists(&sha).await.unwrap());
 }
+
+#[tokio::test]
+async fn test_gc_execute_batch_limits_one_server_side_batch() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata.clone(),
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+        5,
+    );
+
+    for i in 0..40usize {
+        let name = format!("f-{i}.bin");
+        seed_file(&service, &name, "repo-a", "hf", &[i as u8 + 1]).await;
+        service
+            .delete_file_all_sources("repo-a", &name, Some("hf"))
+            .await
+            .unwrap();
+    }
+
+    let result = service.gc_execute_batch(32).await.unwrap();
+    assert_eq!(result.deleted_chunks, 32);
+    assert!(result.has_more);
+
+    let remaining = metadata.get_orphan_chunks().unwrap();
+    assert_eq!(remaining.len(), 8);
+}

@@ -1,8 +1,8 @@
 use crate::config::default_admin_token_file_path;
 use crate::control::{
     DeleteResponse, FileListResponse, FileShowResponse, GcPreviewResponse, GcRequest,
-    GcResultResponse, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
-    ServiceStatusResponse,
+    GcResultResponse, ReconsileRequest, ReconsileResponse, RepoListResponse,
+    RepoShowResponse, ServiceStatsResponse, ServiceStatusResponse,
 };
 use std::path::PathBuf;
 
@@ -38,13 +38,55 @@ impl AdminClient {
     }
 
     pub async fn service_gc_preview(&self) -> anyhow::Result<GcPreviewResponse> {
-        self.post("/_hugrs/service/gc", &GcRequest { dry_run: true })
+        self.post(
+            "/_hugrs/service/gc",
+            &GcRequest {
+                dry_run: true,
+                batch_size: None,
+            },
+        )
             .await
     }
 
     pub async fn service_gc_execute(&self) -> anyhow::Result<GcResultResponse> {
-        self.post("/_hugrs/service/gc", &GcRequest { dry_run: false })
-            .await
+        self.post(
+            "/_hugrs/service/gc",
+            &GcRequest {
+                dry_run: false,
+                batch_size: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn service_gc_execute_batch(
+        &self,
+        batch_size: Option<usize>,
+    ) -> anyhow::Result<GcResultResponse> {
+        self.post(
+            "/_hugrs/service/gc",
+            &GcRequest {
+                dry_run: false,
+                batch_size,
+            },
+        )
+        .await
+    }
+
+    pub async fn service_reconsile_dry_run(&self) -> anyhow::Result<ReconsileResponse> {
+        self.post(
+            "/_hugrs/service/reconsile",
+            &ReconsileRequest { dry_run: true },
+        )
+        .await
+    }
+
+    pub async fn service_reconsile_apply(&self) -> anyhow::Result<ReconsileResponse> {
+        self.post(
+            "/_hugrs/service/reconsile",
+            &ReconsileRequest { dry_run: false },
+        )
+        .await
     }
 
     pub async fn repos_list(&self, source: Option<&str>) -> anyhow::Result<RepoListResponse> {

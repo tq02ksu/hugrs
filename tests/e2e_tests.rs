@@ -1153,6 +1153,34 @@ async fn test_control_api_returns_service_status() {
 }
 
 #[tokio::test]
+async fn test_control_api_reconsile_dry_run_reports_summary() {
+    let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
+    let dir = TempDir::new().unwrap();
+    let app = build_hugrs_router(&upstream, &dir);
+
+    use tower::util::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/_hugrs/service/reconsile")
+        .header("Authorization", "Bearer test-admin-token")
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(r#"{"dry_run":true}"#))
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 10_000_000)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["scanned_chunks"].is_number());
+    assert!(json["mismatched_chunks"].is_number());
+    assert!(json["refcount_fixed"].is_number());
+    assert!(json["orphaned_marked"].is_number());
+    assert!(json["orphaned_cleared"].is_number());
+}
+
+#[tokio::test]
 async fn test_control_api_file_delete_without_source_applies_to_all_sources() {
     let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
     let dir = TempDir::new().unwrap();

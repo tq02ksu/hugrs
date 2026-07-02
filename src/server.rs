@@ -1,8 +1,9 @@
 use crate::config::Config;
 use crate::control::{
     AuthInfo, CacheInfo, DeleteResponse, FileListItem, FileListResponse, FileShowResponse,
-    GcPreviewResponse, GcRequest, GcResultResponse, RepoListItem, RepoListResponse,
-    RepoShowResponse, ServiceStatsResponse, ServiceStatusResponse, SourceInfo, SourcesInfo,
+    GcPreviewResponse, GcRequest, GcResultResponse, ReconsileRequest, ReconsileResponse,
+    RepoListItem, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
+    ServiceStatusResponse, SourceInfo, SourcesInfo,
 };
 use crate::git;
 use crate::hf;
@@ -162,6 +163,7 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/_hugrs/service", get(control_service_status))
         .route("/_hugrs/service/stats", get(control_service_stats))
         .route("/_hugrs/service/gc", post(control_service_gc))
+        .route("/_hugrs/service/reconsile", post(control_service_reconsile))
         .route("/_hugrs/repos", get(control_repos_list))
         .route(
             "/_hugrs/repos/{*repo}",
@@ -1074,16 +1076,39 @@ async fn control_service_gc(
             .map_err(|e| AppError::Anyhow(e.into()))?,
         ))
     } else {
-        let result = service.gc_execute().await.map_err(AppError::Anyhow)?;
+        let result = service
+            .gc_execute_batch(req.batch_size.unwrap_or(32))
+            .await
+            .map_err(AppError::Anyhow)?;
         Ok(Json(
             serde_json::to_value(GcResultResponse {
                 deleted_chunks: result.deleted_chunks,
                 reclaimed_bytes: result.reclaimed_bytes,
                 skipped_chunks: result.skipped_chunks,
+                has_more: result.has_more,
             })
             .map_err(|e| AppError::Anyhow(e.into()))?,
         ))
     }
+}
+
+async fn control_service_reconsile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ReconsileRequest>,
+) -> Result<Json<ReconsileResponse>, AppError> {
+    require_admin(&headers, &state)?;
+    let service = state.service.lock().await;
+    let result = service
+        .reconsile_chunk_refs(req.dry_run)
+        .map_err(AppError::Anyhow)?;
+    Ok(Json(ReconsileResponse {
+        scanned_chunks: result.scanned_chunks,
+        mismatched_chunks: result.mismatched_chunks,
+        refcount_fixed: result.refcount_fixed,
+        orphaned_marked: result.orphaned_marked,
+        orphaned_cleared: result.orphaned_cleared,
+    }))
 }
 
 async fn control_repos_list(

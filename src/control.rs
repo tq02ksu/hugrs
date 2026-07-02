@@ -112,6 +112,7 @@ pub struct DeleteResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GcRequest {
     pub dry_run: bool,
+    pub batch_size: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,4 +126,19 @@ pub struct GcResultResponse {
     pub deleted_chunks: usize,
     pub reclaimed_bytes: u64,
     pub skipped_chunks: usize,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconsileRequest {
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconsileResponse {
+    pub scanned_chunks: usize,
+    pub mismatched_chunks: usize,
+    pub refcount_fixed: usize,
+    pub orphaned_marked: usize,
+    pub orphaned_cleared: usize,
 }

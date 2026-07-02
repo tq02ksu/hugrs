@@ -91,3 +91,17 @@ fn test_files_alias_maps_to_file() {
         _ => panic!("expected file resource"),
     }
 }
+
+#[test]
+fn test_service_reconsile_command_parses() {
+    let cli = Cli::try_parse_from(["hugrsctl", "service", "reconsile", "--dry-run"])
+        .expect("service reconsile should parse");
+
+    match cli.resource {
+        Resource::Service(args) => match args.command.unwrap() {
+            ServiceCommand::Reconsile { dry_run } => assert!(dry_run),
+            _ => panic!("expected service reconsile command"),
+        },
+        _ => panic!("expected service resource"),
+    }
+}

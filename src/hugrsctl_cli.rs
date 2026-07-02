@@ -1,8 +1,8 @@
 use crate::admin_client::AdminClient;
 use crate::control::{
     DeleteResponse, FileListItem, FileListResponse, FileShowResponse, GcPreviewResponse,
-    GcResultResponse, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
-    ServiceStatusResponse,
+    GcResultResponse, ReconsileResponse, RepoListResponse, RepoShowResponse,
+    ServiceStatsResponse, ServiceStatusResponse,
 };
 use clap::{Args, Parser, Subcommand};
 
@@ -45,6 +45,10 @@ pub enum ServiceCommand {
     Status,
     Stats,
     Gc {
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Reconsile {
         #[arg(long)]
         dry_run: bool,
     },
@@ -104,9 +108,55 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     let value = client.service_gc_preview().await?;
                     print_gc_preview(cli.json, &value);
                 } else {
-                    let value = client.service_gc_execute().await?;
-                    print_gc_result(cli.json, &value);
+                    let mut total = GcResultResponse {
+                        deleted_chunks: 0,
+                        reclaimed_bytes: 0,
+                        skipped_chunks: 0,
+                        has_more: false,
+                    };
+                    let mut batch = 1usize;
+
+                    loop {
+                        let value = client.service_gc_execute_batch(None).await?;
+                        if !cli.json {
+                            println!(
+                                "batch {}: deleted {} chunks, reclaimed {}, skipped {}",
+                                batch,
+                                value.deleted_chunks,
+                                format_bytes(value.reclaimed_bytes),
+                                value.skipped_chunks,
+                            );
+                        }
+                        total.deleted_chunks += value.deleted_chunks;
+                        total.reclaimed_bytes += value.reclaimed_bytes;
+                        total.skipped_chunks += value.skipped_chunks;
+                        total.has_more = value.has_more;
+                        if !value.has_more {
+                            break;
+                        }
+                        batch += 1;
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+
+                    if cli.json {
+                        print_json(&total);
+                    } else {
+                        println!(
+                            "done: deleted {} chunks, reclaimed {}, skipped {}",
+                            total.deleted_chunks,
+                            format_bytes(total.reclaimed_bytes),
+                            total.skipped_chunks,
+                        );
+                    }
                 }
+            }
+            ServiceCommand::Reconsile { dry_run } => {
+                let value = if dry_run {
+                    client.service_reconsile_dry_run().await?
+                } else {
+                    client.service_reconsile_apply().await?
+                };
+                print_reconsile_result(cli.json, &value);
             }
         },
         Resource::Repo(args) => match args.command.unwrap_or(ReposCommand::List) {
@@ -235,16 +285,18 @@ fn print_gc_preview(json: bool, value: &GcPreviewResponse) {
     }
 }
 
-fn print_gc_result(json: bool, value: &GcResultResponse) {
+fn print_reconsile_result(json: bool, value: &ReconsileResponse) {
     if json {
         print_json(value);
         return;
     }
 
     let rows = [
-        ("deleted chunks", value.deleted_chunks.to_string()),
-        ("reclaimed", format_bytes(value.reclaimed_bytes)),
-        ("skipped chunks", value.skipped_chunks.to_string()),
+        ("scanned chunks", value.scanned_chunks.to_string()),
+        ("mismatched chunks", value.mismatched_chunks.to_string()),
+        ("refcount fixed", value.refcount_fixed.to_string()),
+        ("orphaned marked", value.orphaned_marked.to_string()),
+        ("orphaned cleared", value.orphaned_cleared.to_string()),
     ];
     let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
     for (label, value) in rows {

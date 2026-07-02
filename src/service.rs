@@ -68,6 +68,7 @@ pub struct GcResult {
     pub deleted_chunks: usize,
     pub reclaimed_bytes: u64,
     pub skipped_chunks: usize,
+    pub has_more: bool,
 }
 
 struct DownloadedChunk {
@@ -560,9 +561,15 @@ impl CacheService {
         })
     }
 
-    pub async fn gc_execute(&self) -> anyhow::Result<GcResult> {
-        const GC_BATCH_SIZE: usize = 32;
-        let orphans = self.metadata.list_orphan_chunks_batch(GC_BATCH_SIZE)?;
+    pub fn reconsile_chunk_refs(
+        &self,
+        dry_run: bool,
+    ) -> anyhow::Result<crate::metadata::ReconsileChunkRefsResult> {
+        self.metadata.reconsile_chunk_refs(dry_run)
+    }
+
+    pub async fn gc_execute_batch(&self, batch_size: usize) -> anyhow::Result<GcResult> {
+        let orphans = self.metadata.list_orphan_chunks_batch(batch_size)?;
         let mut result = GcResult::default();
 
         for chunk in orphans {
@@ -578,7 +585,13 @@ impl CacheService {
             }
         }
 
+        result.has_more = !self.metadata.list_orphan_chunks_batch(1)?.is_empty();
+
         Ok(result)
+    }
+
+    pub async fn gc_execute(&self) -> anyhow::Result<GcResult> {
+        self.gc_execute_batch(32).await
     }
 
     pub async fn gc(&self) -> anyhow::Result<usize> {

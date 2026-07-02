@@ -154,6 +154,58 @@ fn test_stats_ignores_orphan_chunks() {
 }
 
 #[test]
+fn test_reconsile_chunk_refs_dry_run_reports_without_mutating() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    let file = store.add_file("f.bin", "repo", 100, "hf").unwrap();
+    store.ensure_chunk("sha-a", "local", "sh/a", 100, 100).unwrap();
+    store.link_file_chunk(file.id, "sha-a", 0, 100).unwrap();
+
+    {
+        let conn = store.raw_conn().unwrap();
+        conn.execute("UPDATE chunks SET ref_count = 4 WHERE sha256 = 'sha-a'", [])
+            .unwrap();
+    }
+
+    let result = store.reconsile_chunk_refs(true).unwrap();
+    assert_eq!(result.scanned_chunks, 1);
+    assert_eq!(result.mismatched_chunks, 1);
+    assert_eq!(result.refcount_fixed, 1);
+
+    let chunk = store.get_chunk("sha-a").unwrap().unwrap();
+    assert_eq!(chunk.ref_count, 4);
+}
+
+#[test]
+fn test_reconsile_chunk_refs_apply_repairs_refcount_and_orphan_state() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    let file = store.add_file("f.bin", "repo", 100, "hf").unwrap();
+    store.ensure_chunk("sha-a", "local", "sh/a", 100, 100).unwrap();
+    store.link_file_chunk(file.id, "sha-a", 0, 100).unwrap();
+    store.mark_chunk_orphaned("sha-a").unwrap();
+
+    {
+        let conn = store.raw_conn().unwrap();
+        conn.execute("UPDATE chunks SET ref_count = 4 WHERE sha256 = 'sha-a'", [])
+            .unwrap();
+    }
+
+    let result = store.reconsile_chunk_refs(false).unwrap();
+    assert_eq!(result.mismatched_chunks, 1);
+    assert_eq!(result.refcount_fixed, 1);
+    assert_eq!(result.orphaned_cleared, 1);
+
+    let chunk = store.get_chunk("sha-a").unwrap().unwrap();
+    assert_eq!(chunk.ref_count, 1);
+    assert_eq!(chunk.orphaned_at, None);
+}
+
+#[test]
 fn test_orphan_stats_count_chunks_and_bytes() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");

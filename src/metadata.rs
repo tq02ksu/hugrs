@@ -51,6 +51,15 @@ pub struct Stats {
     pub served_bytes: u64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ReconsileChunkRefsResult {
+    pub scanned_chunks: usize,
+    pub mismatched_chunks: usize,
+    pub refcount_fixed: usize,
+    pub orphaned_marked: usize,
+    pub orphaned_cleared: usize,
+}
+
 pub struct MetadataStore {
     conn: Arc<Mutex<Connection>>,
 }
@@ -181,7 +190,7 @@ impl MetadataStore {
     }
 
     pub fn delete_file(&self, name: &str, source: &str) -> anyhow::Result<bool> {
-        let conn = self.conn()?;
+        let mut conn = self.conn()?;
         let file_id: Option<i64> = conn
             .query_row(
                 "SELECT id FROM files WHERE name = ?1 AND source = ?2",
@@ -192,49 +201,146 @@ impl MetadataStore {
 
         match file_id {
             Some(id) => {
-                Self::delete_file_by_id_internal(&conn, id)?;
+                let tx = conn.transaction()?;
+                Self::delete_file_by_id_tx(&tx, id)?;
+                tx.commit()?;
                 Ok(true)
             }
             None => Ok(false),
         }
     }
 
-    fn delete_file_by_id_internal(conn: &Connection, file_id: i64) -> anyhow::Result<()> {
-        let mut stmt = conn.prepare("SELECT sha256 FROM file_chunks WHERE file_id = ?1")?;
+    fn delete_file_by_id_tx(
+        tx: &rusqlite::Transaction<'_>,
+        file_id: i64,
+    ) -> anyhow::Result<()> {
+        let mut stmt = tx.prepare("SELECT sha256 FROM file_chunks WHERE file_id = ?1")?;
         let chunks: Vec<String> = stmt
             .query_map(params![file_id], |row| row.get::<_, String>(0))?
             .filter_map(Result::ok)
             .collect();
         for sha256 in &chunks {
-            conn.execute(
+            tx.execute(
                 "UPDATE chunks SET ref_count = ref_count - 1 WHERE sha256 = ?1",
                 params![sha256],
             )?;
-            conn.execute(
+            tx.execute(
                 "UPDATE chunks SET orphaned_at = datetime('now') WHERE sha256 = ?1 AND ref_count = 0",
                 params![sha256],
             )?;
         }
-        conn.execute(
+        tx.execute(
             "DELETE FROM file_chunks WHERE file_id = ?1",
             params![file_id],
         )?;
-        conn.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
+        tx.execute("DELETE FROM files WHERE id = ?1", params![file_id])?;
         Ok(())
     }
 
     pub fn delete_files_by_repo(&self, repo: &str) -> anyhow::Result<usize> {
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare("SELECT id FROM files WHERE repo = ?1")?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare("SELECT id FROM files WHERE repo = ?1")?;
         let file_ids: Vec<i64> = stmt
             .query_map(params![repo], |row| row.get::<_, i64>(0))?
             .filter_map(Result::ok)
             .collect();
+        drop(stmt);
 
         for id in &file_ids {
-            Self::delete_file_by_id_internal(&conn, *id)?;
+            Self::delete_file_by_id_tx(&tx, *id)?;
         }
+        tx.commit()?;
         Ok(file_ids.len())
+    }
+
+    pub fn reconsile_chunk_refs(&self, dry_run: bool) -> anyhow::Result<ReconsileChunkRefsResult> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut result = ReconsileChunkRefsResult::default();
+
+        let rows = {
+            let mut stmt = tx.prepare(
+                "WITH actual AS (
+                     SELECT sha256, COUNT(*) AS actual_refs
+                     FROM file_chunks
+                     GROUP BY sha256
+                 )
+                 SELECT c.sha256,
+                        c.ref_count,
+                        COALESCE(a.actual_refs, 0) AS actual_refs,
+                        c.orphaned_at
+                 FROM chunks c
+                 LEFT JOIN actual a ON a.sha256 = c.sha256",
+            )?;
+
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?;
+
+            let mut collected = Vec::new();
+            for row in rows {
+                collected.push(row?);
+            }
+            collected
+        };
+
+        for (sha256, ref_count, actual_refs, orphaned_at) in rows {
+            result.scanned_chunks += 1;
+
+            let ref_mismatch = ref_count != actual_refs;
+            let should_clear_orphan = actual_refs > 0 && orphaned_at.is_some();
+            let should_mark_orphan = actual_refs == 0 && orphaned_at.is_none();
+
+            if !ref_mismatch && !should_clear_orphan && !should_mark_orphan {
+                continue;
+            }
+
+            if ref_mismatch {
+                result.mismatched_chunks += 1;
+                result.refcount_fixed += 1;
+            }
+            if should_clear_orphan {
+                result.orphaned_cleared += 1;
+            }
+            if should_mark_orphan {
+                result.orphaned_marked += 1;
+            }
+
+            if dry_run {
+                continue;
+            }
+
+            tx.execute(
+                "UPDATE chunks SET ref_count = ?2 WHERE sha256 = ?1",
+                params![sha256, actual_refs],
+            )?;
+
+            if actual_refs > 0 {
+                tx.execute(
+                    "UPDATE chunks SET orphaned_at = NULL WHERE sha256 = ?1",
+                    params![sha256],
+                )?;
+            } else if orphaned_at.is_none() {
+                tx.execute(
+                    "UPDATE chunks SET orphaned_at = datetime('now') WHERE sha256 = ?1",
+                    params![sha256],
+                )?;
+            }
+        }
+
+        if dry_run {
+            tx.rollback()?;
+        } else {
+            tx.commit()?;
+        }
+
+        Ok(result)
     }
 
     pub fn list_repos_by_access(&self, limit: usize) -> anyhow::Result<Vec<String>> {
