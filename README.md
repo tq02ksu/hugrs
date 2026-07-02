@@ -25,6 +25,13 @@ docker run -p 3000:3000 \
   ghcr.io/tq02ksu/hugrs:0.5.0
 ```
 
+## Homebrew
+
+```bash
+brew tap tq02ksu/tap
+brew install tq02ksu/tap/hugrs
+```
+
 ## Quick Start
 
 ```bash
