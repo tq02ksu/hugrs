@@ -206,6 +206,44 @@ fn test_reconsile_chunk_refs_apply_repairs_refcount_and_orphan_state() {
 }
 
 #[test]
+fn test_delete_file_transaction_rolls_back_on_failure() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    store
+        .ensure_chunk("sha-a", "local", "sh/a", 100, 100)
+        .unwrap();
+    let file = store.add_file("f.bin", "repo", 100, "hf").unwrap();
+    store.link_file_chunk(file.id, "sha-a", 0, 100).unwrap();
+
+    {
+        let conn = store.raw_conn().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_file_chunk_delete
+             BEFORE DELETE ON file_chunks
+             BEGIN
+               SELECT RAISE(FAIL, 'boom');
+             END;",
+        )
+        .unwrap();
+    }
+
+    let err = store.delete_file("f.bin", "hf").unwrap_err();
+    assert!(err.to_string().contains("boom"));
+
+    let file = store.get_file_by_name("f.bin", "hf").unwrap();
+    assert!(file.is_some(), "file row should still exist after rollback");
+
+    let chunk = store.get_chunk("sha-a").unwrap().unwrap();
+    assert_eq!(chunk.ref_count, 1, "ref_count should roll back");
+    assert_eq!(chunk.orphaned_at, None, "orphan marker should roll back");
+
+    let links = store.get_file_chunks(file.unwrap().id).unwrap();
+    assert_eq!(links.len(), 1, "file_chunks should still exist after rollback");
+}
+
+#[test]
 fn test_orphan_stats_count_chunks_and_bytes() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
