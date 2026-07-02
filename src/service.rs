@@ -569,8 +569,15 @@ impl CacheService {
     }
 
     pub async fn gc_execute_batch(&self, batch_size: usize) -> anyhow::Result<GcResult> {
-        let orphans = self.metadata.list_orphan_chunks_batch(batch_size)?;
-        let mut result = GcResult::default();
+        let mut orphans = self.metadata.list_orphan_chunks_batch(batch_size + 1)?;
+        let mut result = GcResult {
+            has_more: orphans.len() > batch_size,
+            ..GcResult::default()
+        };
+        if result.has_more {
+            orphans.truncate(batch_size);
+        }
+        let mut deleted_sha256s = Vec::with_capacity(orphans.len());
 
         for chunk in orphans {
             if chunk.ref_count != 0 {
@@ -579,13 +586,23 @@ impl CacheService {
             }
             self.backend.delete(&chunk.sha256).await?;
             let reclaimed = chunk.compressed_size.unwrap_or(chunk.size) as u64;
-            if self.metadata.delete_chunk(&chunk.sha256)? {
-                result.deleted_chunks += 1;
-                result.reclaimed_bytes += reclaimed;
-            }
+            deleted_sha256s.push((chunk.sha256, reclaimed));
         }
 
-        result.has_more = !self.metadata.list_orphan_chunks_batch(1)?.is_empty();
+        if !deleted_sha256s.is_empty() {
+            let deleted = self.metadata.delete_chunks_batch(
+                &deleted_sha256s
+                    .iter()
+                    .map(|(sha256, _)| sha256.clone())
+                    .collect::<Vec<_>>(),
+            )?;
+            for sha256 in deleted {
+                if let Some((_, reclaimed)) = deleted_sha256s.iter().find(|(s, _)| s == &sha256) {
+                    result.deleted_chunks += 1;
+                    result.reclaimed_bytes += reclaimed;
+                }
+            }
+        }
 
         Ok(result)
     }

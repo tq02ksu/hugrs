@@ -23,7 +23,7 @@ fn test_init_schema() {
         .unwrap()
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
 }
 
 #[test]
@@ -84,6 +84,41 @@ fn test_unlink_and_gc() {
     assert_eq!(orphans.len(), 1);
     assert_eq!(orphans[0].sha256, "def456");
     assert!(orphans[0].orphaned_at.is_some());
+}
+
+#[test]
+fn test_delete_chunks_batch_removes_only_unreferenced_candidates() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    store
+        .ensure_chunk("orphan-a", "local", "or/ph/orphan-a", 100, 100)
+        .unwrap();
+    store
+        .ensure_chunk("orphan-b", "local", "or/ph/orphan-b", 200, 200)
+        .unwrap();
+    store
+        .ensure_chunk("live-c", "local", "li/ve/live-c", 300, 300)
+        .unwrap();
+    let file = store.add_file("live.bin", "repo", 300, "hf").unwrap();
+    store.link_file_chunk(file.id, "live-c", 0, 300).unwrap();
+
+    let deleted = store
+        .delete_chunks_batch(&[
+            "orphan-a".to_string(),
+            "live-c".to_string(),
+            "orphan-b".to_string(),
+        ])
+        .unwrap();
+
+    assert_eq!(deleted.len(), 2);
+    assert!(deleted.contains(&"orphan-a".to_string()));
+    assert!(deleted.contains(&"orphan-b".to_string()));
+    assert!(!deleted.contains(&"live-c".to_string()));
+    assert!(store.get_chunk("orphan-a").unwrap().is_none());
+    assert!(store.get_chunk("orphan-b").unwrap().is_none());
+    assert!(store.get_chunk("live-c").unwrap().is_some());
 }
 
 #[test]
@@ -252,6 +287,30 @@ fn test_delete_file_transaction_rolls_back_on_failure() {
 }
 
 #[test]
+fn test_delete_file_handles_duplicate_chunk_refs_in_single_file() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+
+    store
+        .ensure_chunk("dup-sha", "local", "du/ps/dup-sha", 100, 100)
+        .unwrap();
+    let file = store.add_file("dup.bin", "repo", 200, "hf").unwrap();
+    store.link_file_chunk(file.id, "dup-sha", 0, 100).unwrap();
+    store.link_file_chunk(file.id, "dup-sha", 1, 100).unwrap();
+
+    let chunk = store.get_chunk("dup-sha").unwrap().unwrap();
+    assert_eq!(chunk.ref_count, 2);
+
+    let deleted = store.delete_file("dup.bin", "hf").unwrap();
+    assert!(deleted);
+
+    let chunk = store.get_chunk("dup-sha").unwrap().unwrap();
+    assert_eq!(chunk.ref_count, 0);
+    assert!(chunk.orphaned_at.is_some());
+}
+
+#[test]
 fn test_orphan_stats_count_chunks_and_bytes() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
@@ -269,6 +328,42 @@ fn test_orphan_stats_count_chunks_and_bytes() {
     let (count, bytes) = store.list_orphan_chunks_stats().unwrap();
     assert_eq!(count, 2);
     assert_eq!(bytes, 230);
+}
+
+#[test]
+fn test_orphan_batch_query_uses_covering_index() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("test.db");
+    let store = MetadataStore::new(&db_path).unwrap();
+    let conn = store.raw_conn().unwrap();
+
+    let mut stmt = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT sha256, backend, path, size, compressed_size, ref_count, orphaned_at
+             FROM chunks
+             WHERE ref_count = 0 AND orphaned_at IS NOT NULL
+             ORDER BY orphaned_at ASC
+             LIMIT 32",
+        )
+        .unwrap();
+    let details: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    assert!(
+        details.iter().any(|detail| {
+            detail.contains("idx_chunks_ref_count_orphaned_at")
+                || detail.contains("idx_chunks_gc_orphaned")
+        }),
+        "expected orphan GC query to use a dedicated orphan index, got {details:?}"
+    );
+    assert!(
+        !details.iter().any(|detail| detail.contains("TEMP B-TREE")),
+        "expected orphan GC query to avoid temp sorting, got {details:?}"
+    );
 }
 
 #[test]

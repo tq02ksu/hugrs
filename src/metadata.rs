@@ -1,5 +1,6 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, params_from_iter, Connection};
 use rusqlite_migration::{Migrations, M};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -99,6 +100,7 @@ impl MetadataStore {
             M::up(include_str!("migrations/004_add_indexes.sql")),
             M::up(include_str!("migrations/005_cleanup_headerless_files.sql")),
             M::up(include_str!("migrations/006_add_chunk_orphaned_at.sql")),
+            M::up(include_str!("migrations/007_add_orphan_gc_index.sql")),
         ]);
 
         let result = migrations.to_latest(&mut conn);
@@ -211,20 +213,47 @@ impl MetadataStore {
     }
 
     fn delete_file_by_id_tx(tx: &rusqlite::Transaction<'_>, file_id: i64) -> anyhow::Result<()> {
-        let mut stmt = tx.prepare("SELECT sha256 FROM file_chunks WHERE file_id = ?1")?;
-        let chunks: Vec<String> = stmt
-            .query_map(params![file_id], |row| row.get::<_, String>(0))?
-            .filter_map(Result::ok)
-            .collect();
-        for sha256 in &chunks {
-            tx.execute(
-                "UPDATE chunks SET ref_count = ref_count - 1 WHERE sha256 = ?1",
-                params![sha256],
-            )?;
-            tx.execute(
-                "UPDATE chunks SET orphaned_at = datetime('now') WHERE sha256 = ?1 AND ref_count = 0",
-                params![sha256],
-            )?;
+        let mut stmt = tx.prepare(
+            "SELECT sha256, COUNT(*) AS refs_lost
+             FROM file_chunks
+             WHERE file_id = ?1
+             GROUP BY sha256",
+        )?;
+        let chunk_ref_deltas: BTreeMap<String, i64> = stmt
+            .query_map(params![file_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        drop(stmt);
+
+        if !chunk_ref_deltas.is_empty() {
+            let values_clause = std::iter::repeat_n("(?, ?)", chunk_ref_deltas.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "WITH deleted(sha256, refs_lost) AS (VALUES {values_clause})
+                 UPDATE chunks
+                 SET ref_count = ref_count - (
+                        SELECT deleted.refs_lost
+                        FROM deleted
+                        WHERE deleted.sha256 = chunks.sha256
+                     ),
+                     orphaned_at = CASE
+                        WHEN ref_count - (
+                            SELECT deleted.refs_lost
+                            FROM deleted
+                            WHERE deleted.sha256 = chunks.sha256
+                        ) = 0 THEN datetime('now')
+                        ELSE orphaned_at
+                     END
+                 WHERE sha256 IN (SELECT sha256 FROM deleted)"
+            );
+            let mut sql_params = Vec::with_capacity(chunk_ref_deltas.len() * 2);
+            for (sha256, refs_lost) in &chunk_ref_deltas {
+                sql_params.push(rusqlite::types::Value::from(sha256.clone()));
+                sql_params.push(rusqlite::types::Value::from(*refs_lost));
+            }
+            tx.execute(&sql, params_from_iter(sql_params))?;
         }
         tx.execute(
             "DELETE FROM file_chunks WHERE file_id = ?1",
@@ -614,6 +643,46 @@ impl MetadataStore {
             params![sha256],
         )?;
         Ok(deleted > 0)
+    }
+
+    pub fn delete_chunks_batch(&self, sha256s: &[String]) -> anyhow::Result<Vec<String>> {
+        if sha256s.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let placeholders = std::iter::repeat_n("?", sha256s.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let select_sql = format!(
+            "SELECT sha256 FROM chunks
+             WHERE ref_count = 0 AND sha256 IN ({placeholders})"
+        );
+        let deletable: Vec<String> = {
+            let mut stmt = tx.prepare(&select_sql)?;
+            let rows = stmt.query_map(params_from_iter(sha256s.iter()), |row| {
+                row.get::<_, String>(0)
+            })?;
+            rows.collect::<Result<_, _>>()?
+        };
+
+        if deletable.is_empty() {
+            tx.commit()?;
+            return Ok(Vec::new());
+        }
+
+        let delete_placeholders = std::iter::repeat_n("?", deletable.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let delete_sql = format!(
+            "DELETE FROM chunks
+             WHERE ref_count = 0 AND sha256 IN ({delete_placeholders})"
+        );
+        tx.execute(&delete_sql, params_from_iter(deletable.iter()))?;
+        tx.commit()?;
+        Ok(deletable)
     }
 
     pub fn get_stats(&self) -> anyhow::Result<Stats> {
