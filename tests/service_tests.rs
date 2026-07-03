@@ -131,8 +131,8 @@ async fn test_delete_and_gc() {
     service.delete("x.bin", "hf").await.unwrap();
     assert!(service.info("x.bin", "hf").await.unwrap().is_none());
 
-    let count = service.gc().await.unwrap();
-    assert!(count > 0);
+    let result = service.gc_execute().await.unwrap();
+    assert!(result.deleted_chunks > 0);
 }
 
 #[tokio::test]

@@ -611,20 +611,20 @@ impl CacheService {
         self.gc_execute_batch(32).await
     }
 
-    pub async fn gc(&self) -> anyhow::Result<usize> {
-        let mut total = 0usize;
-        loop {
-            let result = self.gc_execute().await?;
-            if result.deleted_chunks == 0 {
-                break;
-            }
-            total += result.deleted_chunks;
-        }
-        Ok(total)
-    }
-
     pub async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
         loop {
+            // Step 1: try GC alone first — reclaim orphans from prior deletions
+            let freed = self.gc_execute().await?;
+            if freed.deleted_chunks > 0 {
+                let stats = self.metadata.get_stats()?;
+                if stats.original_bytes as u64 <= max_size {
+                    break;
+                }
+                // Still over limit, loop back and try GC again or evict
+                continue;
+            }
+
+            // Step 2: GC reclaimed nothing — evict the LRU repo
             let stats = self.metadata.get_stats()?;
             if stats.original_bytes as u64 <= max_size {
                 break;
@@ -644,7 +644,7 @@ impl CacheService {
                 stats.original_bytes
             );
 
-            let _ = self.gc().await?;
+            let _ = self.gc_execute().await?;
         }
         Ok(())
     }
