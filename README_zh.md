@@ -17,14 +17,14 @@
 ## Docker
 
 ```bash
-docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.5.0
+docker run -p 3000:3000 ghcr.io/tq02ksu/hugrs:0.6.0
 
 # 指定镜像源 + 持久化缓存（使用命名卷）
 docker volume create hugrs-cache
 docker run -p 3000:3000 \
   -v hugrs-cache:/home/hugrs/.cache/hugrs \
   -e HUGRS_HF_ENDPOINT=https://hf-mirror.com \
-  ghcr.io/tq02ksu/hugrs:0.5.0
+  ghcr.io/tq02ksu/hugrs:0.6.0
 ```
 
 ## Homebrew

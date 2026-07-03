@@ -113,6 +113,11 @@ cargo build --release
   4. Only after the checks pass, bump the version in `Cargo.toml`.
   5. Update `Cargo.lock`, Docker image tags in `README.md` / `README_zh.md`, and any user-facing docs that mention the current release version.
   6. Commit the release changes, create the git tag, and push both commit and tag.
+  7. **Update Homebrew tap formula** — the tap repo `homebrew-tap/Formula/hugrs.rb`
+      needs version and SHA256 updated for all 4 platform binaries (aarch64/x86_64 × macOS/Linux).
+      The tap repo lives at `../homebrew-tap/` (same level as this repo). Alternatively,
+      use `gh repo clone tq02ksu/homebrew-tap` or `git clone` to access it. After updating,
+      commit and push the tap repo as well.
 
 ## Project Structure
 

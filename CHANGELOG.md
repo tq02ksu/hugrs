@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0] - 2026-07-04
+
+### Added
+- Reconsile repair and batched GC (`hugrsctl service reconsile` + `hugrsctl service gc`)
+- File download completion status reporting in `hugrsctl files show`
+- File download progress display in `hugrsctl files show`
+- Homebrew install documentation
+
+### Changed
+- Refactored: transactional chunk persistence and internal GC batch size
+- Refactored: unify runtime data paths
+- Refactored: evict_if_needed tries GC first before evicting a repo; removed unused server-side `gc()` loop
+- Optimized: GC chunk reclamation batching
+- Split security scan workflows from CI
+- Updated quality gate documentation
+
+### Fixed
+- Exclude orphan chunks from stored bytes stats
+- Reconcile metadata before reusing cache
+
+### Tests
+- Cover delete rollback transaction
+
+### Docs
+- Added poster image to README
+- Clarified Rust lint policy in docs
+- Removed unused env in client usage docs
+- Added packaging and paths plan
+
 ## [0.5.0] - 2026-07-01
 
 ### Added
