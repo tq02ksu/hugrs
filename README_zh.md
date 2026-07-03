@@ -2,6 +2,8 @@
 
 高性能 HuggingFace & ModelScope 模型镜像服务。基于 prefetch + 内容寻址架构，读时 SHA256 校验数据完整性，内置分块去重与压缩，保障大模型供应链安全与高速访问。
 
+![HugRS Overview](docs/poster.png)
+
 ## 核心亮点
 
 - **多平台支持** — 同时支持 HuggingFace (`/hf`) 和 ModelScope (`/ms`) 上游

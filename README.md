@@ -2,6 +2,8 @@
 
 High-performance HuggingFace & ModelScope model mirror. Prefetch-driven, content-addressed architecture with SHA256 integrity verification on read, chunk-level dedup & compression — purpose-built for LLM supply chain security and fast model delivery.
 
+![HugRS Overview](docs/poster.png)
+
 ## Highlights
 
 - **Multi-Platform** — supports both HuggingFace (`/hf`) and ModelScope (`/ms`) upstreams
