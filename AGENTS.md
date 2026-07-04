@@ -98,6 +98,7 @@ cargo build --release
   - `cargo test`
 - During iteration, targeted tests are acceptable for faster feedback, but do not commit until the full required checks for the touched area have passed.
 - Do not commit code that is known to fail formatting, clippy, or tests.
+- **Commit discipline**: keep different types of changes in separate commits. Bug fixes, new features, and release version bumps (Cargo.toml, CHANGELOG, README tags) must be in distinct commits with appropriate prefixes (`fix:`, `feat:`, `release:`). Do not mix bugfix code with version bump metadata in the same commit.
 
 ## Release Checklist
 
