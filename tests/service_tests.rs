@@ -136,7 +136,7 @@ async fn test_delete_and_gc() {
     service.delete("x.bin", "hf").await.unwrap();
     assert!(service.info("x.bin", "hf").await.unwrap().is_none());
 
-    let result = service.gc_execute().await.unwrap();
+    let result = service.gc_execute_batch(32).await.unwrap();
     assert!(result.deleted_chunks > 0);
 }
 
@@ -441,7 +441,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         .await
         .unwrap();
 
-    let result = service.gc_execute().await.unwrap();
+    let result = service.gc_execute_batch(32).await.unwrap();
     assert_eq!(result.deleted_chunks, 1);
     assert!(result.reclaimed_bytes > 0);
     assert!(!service.backend_exists(&sha).await.unwrap());

@@ -357,10 +357,6 @@ impl CacheService {
         run_gc_batch(&self.metadata, &*self.backend, batch_size).await
     }
 
-    pub async fn gc_execute(&self) -> anyhow::Result<GcResult> {
-        self.gc_execute_batch(32).await
-    }
-
     pub async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
         run_eviction(&self.metadata, &*self.backend, max_size).await
     }

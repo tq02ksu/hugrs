@@ -1,0 +1,387 @@
+Request 71d8fd0c-22ed-429f-b0f4-155baa5a4bd6: GET http://com-model.nctn.ai/api/models/poolside/Laguna-M.1/revision/main (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 71d8fd0c-22ed-429f-b0f4-155baa5a4bd6' -d http://com-model.nctn.ai/api/models/poolside/Laguna-M.1/revision/main
+Request 32cd7ebe-809e-4839-820e-34f5b07faba8: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_pro.yaml (authenticated: False)
+Request 4f63dc94-7726-490a-8cd9-9deb2538948d: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_verified.yaml (authenticated: False)
+Request ab30ad0c-5498-47e4-9df7-bba8de061d61: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/terminal-bench-2.0.yaml (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 32cd7ebe-809e-4839-820e-34f5b07faba8' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_pro.yaml
+Request 887f8751-653c-4181-ad72-3d18400d5d9c: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.gitattributes (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 4f63dc94-7726-490a-8cd9-9deb2538948d' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_verified.yaml
+Request 138d5cc2-464d-4960-9688-4b94c90fd62a: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/LICENSE.md (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: ab30ad0c-5498-47e4-9df7-bba8de061d61' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/terminal-bench-2.0.yaml
+Request bc7a5d7a-97ff-4472-ad89-387ee2e74584: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/README.md (authenticated: False)
+Fetching 104 files:   0%|          | 0/104 [00:00<?, ?it/s]Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 887f8751-653c-4181-ad72-3d18400d5d9c' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.gitattributes
+Request ae2b6af7-c654-44c9-af83-cf8741329b60: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/chat_template.jinja (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 138d5cc2-464d-4960-9688-4b94c90fd62a' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/LICENSE.md
+Request a217082d-7572-45ea-a6fb-4e4b3bed2da2: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/config.json (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: bc7a5d7a-97ff-4472-ad89-387ee2e74584' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/README.md
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: ae2b6af7-c654-44c9-af83-cf8741329b60' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/chat_template.jinja
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: a217082d-7572-45ea-a6fb-4e4b3bed2da2' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/config.json
+Downloading '.eval_results/swe-bench_pro.yaml' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/3aee661ee2a0ccf970a2844bde08db12dd3e4ba4.3cbf6bd1.incomplete'
+Request 7a3dcb77-e5a0-4b2c-9c60-8832a5531022: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_pro.yaml (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 7a3dcb77-e5a0-4b2c-9c60-8832a5531022' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_pro.yaml
+Downloading 'chat_template.jinja' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/d45f23f7038aceb3a401547f38a610a4fee47be2.43663043.incomplete'
+Request 58f2c585-77c2-4b8e-bf69-eb736ab3c1dc: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/chat_template.jinja (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 58f2c585-77c2-4b8e-bf69-eb736ab3c1dc' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/chat_template.jinja
+Downloading 'README.md' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/85549be32d6dee1c89bd0d16acb229c7bb4a26a1.f0e88196.incomplete'
+Request c3c25ab7-4a98-4bee-82be-c5b5ed1afd97: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/README.md (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: c3c25ab7-4a98-4bee-82be-c5b5ed1afd97' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/README.md
+Downloading 'LICENSE.md' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/ed854c9bcec930e4f50f03e82e80aa9ce8283e92.70e2694b.incomplete'
+Request f31589c8-ee7f-4689-902c-fd7b9d86c551: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/LICENSE.md (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: f31589c8-ee7f-4689-902c-fd7b9d86c551' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/LICENSE.md
+Downloading 'config.json' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/e137482195c06cd8b60964c9266568abf34a39fc.5bb1d1da.incomplete'
+Request e0bd1691-5cde-49fb-b077-d252445e1aa3: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/config.json (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: e0bd1691-5cde-49fb-b077-d252445e1aa3' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/config.json
+Downloading '.eval_results/swe-bench_verified.yaml' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/942c744467c0cccf391db3d15c504e283419c1d1.b292afe6.incomplete'
+Request 1aad33fe-7ee7-4dff-a31d-e316e235d7f7: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_verified.yaml (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 1aad33fe-7ee7-4dff-a31d-e316e235d7f7' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_verified.yaml
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/3aee661ee2a0ccf970a2844bde08db12dd3e4ba4
+Creating pointer from ../../../blobs/3aee661ee2a0ccf970a2844bde08db12dd3e4ba4 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_pro.yaml
+Request de75067a-93d0-49b5-bacb-386add43234f: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/configuration_laguna.py (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: de75067a-93d0-49b5-bacb-386add43234f' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/configuration_laguna.py
+Fetching 104 files:   1%|          | 1/104 [00:01<02:57,  1.73s/it]Downloading '.eval_results/terminal-bench-2.0.yaml' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/8bffc40f6e8d7b0ddefe7f46189aaaa5c6bafba9.72576c40.incomplete'
+Request c16cd669-ff66-466e-a6a3-2c6d35b3e57d: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/terminal-bench-2.0.yaml (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: c16cd669-ff66-466e-a6a3-2c6d35b3e57d' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/terminal-bench-2.0.yaml
+Downloading '.gitattributes' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/a6344aac8c09253b3b630fb776ae94478aa0275b.647114ee.incomplete'
+Request 042745e9-c4e0-426b-85c9-c681459ee0c9: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.gitattributes (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 042745e9-c4e0-426b-85c9-c681459ee0c9' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/.gitattributes
+Downloading 'configuration_laguna.py' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/a63f2be2ae88abffad6f47cbf775fd15d44766d7.d571da7d.incomplete'
+Request d360601f-182b-491e-8ff3-4a2550a7a8ed: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/configuration_laguna.py (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: d360601f-182b-491e-8ff3-4a2550a7a8ed' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/configuration_laguna.py
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/d45f23f7038aceb3a401547f38a610a4fee47be2
+Creating pointer from ../../blobs/d45f23f7038aceb3a401547f38a610a4fee47be2 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/chat_template.jinja
+Request b8b4594c-8a59-4987-846e-570417877821: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/generation_config.json (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: b8b4594c-8a59-4987-846e-570417877821' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/generation_config.json
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/85549be32d6dee1c89bd0d16acb229c7bb4a26a1
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/ed854c9bcec930e4f50f03e82e80aa9ce8283e92
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/e137482195c06cd8b60964c9266568abf34a39fc
+Creating pointer from ../../blobs/ed854c9bcec930e4f50f03e82e80aa9ce8283e92 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/LICENSE.md
+Creating pointer from ../../blobs/85549be32d6dee1c89bd0d16acb229c7bb4a26a1 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/README.md
+Creating pointer from ../../blobs/e137482195c06cd8b60964c9266568abf34a39fc to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/config.json
+Request 19345fbe-3b1d-47e3-a7fb-26a83977ac05: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00001-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 19345fbe-3b1d-47e3-a7fb-26a83977ac05' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00001-of-00089.safetensors
+Request f3452d30-fa56-496a-a894-d9f23f085588: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/942c744467c0cccf391db3d15c504e283419c1d1
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: f3452d30-fa56-496a-a894-d9f23f085588' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Request bae2fd62-272a-4c19-9407-d7b62c19a6a7: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: bae2fd62-272a-4c19-9407-d7b62c19a6a7' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Creating pointer from ../../../blobs/942c744467c0cccf391db3d15c504e283419c1d1 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/swe-bench_verified.yaml
+Request 85a23190-e4e9-426a-b982-9ffeb58ca6f2: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00004-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 85a23190-e4e9-426a-b982-9ffeb58ca6f2' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00004-of-00089.safetensors
+Fetching 104 files:   2%|▏         | 2/104 [00:04<04:24,  2.59s/it]Downloading 'model-00001-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/230bfc34d0a67f0b92d8beb3dcc94f628ebe82d82c1327f203dab9e0e99b121c.497e5f9d.incomplete'
+Request eb41ed77-1927-422c-aa91-1e6b4df1343f: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00001-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: eb41ed77-1927-422c-aa91-1e6b4df1343f' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00001-of-00089.safetensors
+Downloading 'generation_config.json' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/20a7c5188c0325e130058f6b7537a4503ecbb62c.f94ba77a.incomplete'
+Request 0babe1c0-5a5d-4e76-89f8-8ec6d841fe8a: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/generation_config.json (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 0babe1c0-5a5d-4e76-89f8-8ec6d841fe8a' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/generation_config.json
+Downloading 'model-00003-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/9b34bd3857c3b6872790482145fe3b2bb81476e81a05cf5b4ebdc6b2d081950b.72454bff.incomplete'
+Request f51d2bb4-2327-4327-a19c-2990c07b8808: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: f51d2bb4-2327-4327-a19c-2990c07b8808' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Downloading 'model-00002-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/4bbeb3ecbfa97602d8bd9fab4f078ae33df3867d94df529cf12ab875058c5e55.b89ba42d.incomplete'
+Request 6a66252b-6740-4e14-b4d2-e416a060b950: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 6a66252b-6740-4e14-b4d2-e416a060b950' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Downloading 'model-00004-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/230f8d942b97162d0633373db2e5d33b73172fa1dda3ce65ec477ba95aa5fd2a.c2ff74d4.incomplete'
+Request 5ce9c3c8-4086-4203-b716-3442a91a45de: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00004-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 5ce9c3c8-4086-4203-b716-3442a91a45de' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00004-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/8bffc40f6e8d7b0ddefe7f46189aaaa5c6bafba9
+Creating pointer from ../../../blobs/8bffc40f6e8d7b0ddefe7f46189aaaa5c6bafba9 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/.eval_results/terminal-bench-2.0.yaml
+Request e0eceee7-4440-4804-9608-c5c9965fd617: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: e0eceee7-4440-4804-9608-c5c9965fd617' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Fetching 104 files:   3%|▎         | 3/104 [00:06<03:43,  2.21s/it]Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/a6344aac8c09253b3b630fb776ae94478aa0275b
+Creating pointer from ../../blobs/a6344aac8c09253b3b630fb776ae94478aa0275b to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/.gitattributes
+Request 68933e67-585f-4b30-9194-9fecbb5fa5fc: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 68933e67-585f-4b30-9194-9fecbb5fa5fc' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/a63f2be2ae88abffad6f47cbf775fd15d44766d7
+Creating pointer from ../../blobs/a63f2be2ae88abffad6f47cbf775fd15d44766d7 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/configuration_laguna.py
+Request 429f4585-1d71-4827-a43e-4a767105f473: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 429f4585-1d71-4827-a43e-4a767105f473' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+No local file found. Retrying..
+Request 8c995594-fbbe-4586-a2ef-8a58bf891231: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 8c995594-fbbe-4586-a2ef-8a58bf891231' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors
+No local file found. Retrying..
+Request 2bc51f59-fa9e-4da7-b831-7fbd956ed178: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 2bc51f59-fa9e-4da7-b831-7fbd956ed178' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+No local file found. Retrying..
+Request b0292414-3a8e-4be3-8c6b-082d50b068ec: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: b0292414-3a8e-4be3-8c6b-082d50b068ec' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Downloading 'model-00006-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/763bb266a50c6303ded30cd823b3adf43f1bcd5ee1909add6df9a0bbe5f75c2a.dec5efe9.incomplete'
+Request efddb079-07f9-4120-bb60-53ee89ae5400: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: efddb079-07f9-4120-bb60-53ee89ae5400' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors
+Downloading 'model-00007-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/7104c3c1f8046c56d19737b709479a690f22f62d5edc64b90dc13a769c8b5de1.ebd025df.incomplete'
+Request 96940a9b-d9da-483c-8bc3-f9e2c637671e: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 96940a9b-d9da-483c-8bc3-f9e2c637671e' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Downloading 'model-00005-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/4a052df48579439f9c2fdd0101d62d6fc6514ac21f7e70d6dfd86b4e06f4c33d.fefd6598.incomplete'
+Request 89cf78ec-7683-40be-8fc1-68c86e37a03e: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 89cf78ec-7683-40be-8fc1-68c86e37a03e' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/20a7c5188c0325e130058f6b7537a4503ecbb62c
+Creating pointer from ../../blobs/20a7c5188c0325e130058f6b7537a4503ecbb62c to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/generation_config.json
+Request 4e4b204b-3876-4959-a7fb-14e7970a8d6e: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00008-of-00089.safetensors (authenticated: False)
+Fetching 104 files:  10%|▉         | 10/104 [00:28<04:34,  2.92s/it]Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 4e4b204b-3876-4959-a7fb-14e7970a8d6e' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00008-of-00089.safetensors
+Downloading 'model-00008-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/a800e72938eb992cd81086b76dcf112bea1243cb4095e4bf8785242d1ace1a81.f2e31205.incomplete'
+Request 1be61823-a814-4d60-a8e5-c01733ba297a: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00008-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 1be61823-a814-4d60-a8e5-c01733ba297a' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00008-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors: peer closed connection without sending complete message body (received 3682598912 bytes, expected 5117432672)
+Trying to resume download...
+Request 33287775-b010-4212-b5c5-29ed82316708: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3680501760-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 33287775-b010-4212-b5c5-29ed82316708' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors: peer closed connection without sending complete message body (received 3732930560 bytes, expected 5085993864)
+Trying to resume download...
+Request 4cc5f394-f9d4-4df0-a62d-ad688ed0744d: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3732930560-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 4cc5f394-f9d4-4df0-a62d-ad688ed0744d' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1436930912)
+Trying to resume download...
+Request 44278dbf-cd0c-4237-a0de-14ef14c1215c: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3680501760-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 44278dbf-cd0c-4237-a0de-14ef14c1215c' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
+Trying to resume download...
+Request 059b8942-3aec-43d9-bb6a-12f60ee6861d: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3732930560-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 059b8942-3aec-43d9-bb6a-12f60ee6861d' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1436930912)
+Trying to resume download...
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
+Trying to resume download...
+Request 7a18fd6b-a67b-4c8a-80dc-2aae7457c5c0: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3680501760-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 7a18fd6b-a67b-4c8a-80dc-2aae7457c5c0' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Request 463e568a-15bc-41ba-b748-2da5c8c1cc80: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3732930560-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 463e568a-15bc-41ba-b748-2da5c8c1cc80' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1436930912)
+Trying to resume download...
+Request c4ea1bed-1584-495e-822a-bcb9d7b69353: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3680501760-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: c4ea1bed-1584-495e-822a-bcb9d7b69353' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
+Trying to resume download...
+Request 328a0325-6344-469c-b0f5-7b809ca52ad3: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3732930560-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 328a0325-6344-469c-b0f5-7b809ca52ad3' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1436930912)
+Trying to resume download...
+Request 401cd6c6-3f81-4a62-bafd-41259bc03ede: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3680501760-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 401cd6c6-3f81-4a62-bafd-41259bc03ede' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
+Trying to resume download...
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors: peer closed connection without sending complete message body (received 3829399552 bytes, expected 5117126864)
+Trying to resume download...
+Request fe9e06b7-184d-4f98-a80b-a076a07e5566: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3732930560-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: fe9e06b7-184d-4f98-a80b-a076a07e5566' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors
+Request 08c08a1f-0f49-4dc1-b74e-167052513f28: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3827302400-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 08c08a1f-0f49-4dc1-b74e-167052513f28' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors: peer closed connection without sending complete message body (received 4022337536 bytes, expected 5117126776)
+Trying to resume download...
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00003-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1436930912)
+Max retries exceeded.
+Request e4847465-0eda-4a86-9b97-1edeaff75b52: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: e4847465-0eda-4a86-9b97-1edeaff75b52' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Request 77e5fc74-7ff1-40c9-aec4-56d30f62a43d: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=4016046080-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 77e5fc74-7ff1-40c9-aec4-56d30f62a43d' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00002-of-00089.safetensors: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
+Max retries exceeded.
+Downloading 'model-00009-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/7c69db1555b4499353d52b45d324ad419a5fd400fe2c81bb5398286f26f4bdb0.5f9f659b.incomplete'
+Request e298dfbf-ed2c-461d-b09e-747d7b8d8b33: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: e298dfbf-ed2c-461d-b09e-747d7b8d8b33' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Request f7c793a6-5e6e-4c8d-814f-af1d2940a117: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00010-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: f7c793a6-5e6e-4c8d-814f-af1d2940a117' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00010-of-00089.safetensors
+Downloading 'model-00010-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/848011466cc779a33ea374925d7d1866842eaa2743cc3e3eaa34795b63c7a3e7.59ecaf03.incomplete'
+Request 4f4c8fa7-89bf-46bc-a64b-5abec9fde6b7: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00010-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 4f4c8fa7-89bf-46bc-a64b-5abec9fde6b7' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00010-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1289824464)
+Trying to resume download...
+Request d4bc9069-586b-4c04-a2e4-b88f8edf6549: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3827302400-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: d4bc9069-586b-4c04-a2e4-b88f8edf6549' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 1101080696)
+Trying to resume download...
+Request 109c8b1a-1546-4a26-a922-f6a27df6c44b: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=4016046080-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 109c8b1a-1546-4a26-a922-f6a27df6c44b' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1289824464)
+Trying to resume download...
+Request ee6dd5f9-adf2-4cf8-aa92-8e327593fe8e: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3827302400-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: ee6dd5f9-adf2-4cf8-aa92-8e327593fe8e' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 1101080696)
+Trying to resume download...
+Request 9b278e63-86e8-4a71-a050-dde429d9566b: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=4016046080-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 9b278e63-86e8-4a71-a050-dde429d9566b' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1289824464)
+Trying to resume download...
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 1101080696)
+Trying to resume download...
+Request 71d92472-4f21-492a-9c98-6d046c071ff5: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3827302400-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 71d92472-4f21-492a-9c98-6d046c071ff5' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Request f9f8c136-0995-4e3f-978f-4290b35143bd: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=4016046080-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: f9f8c136-0995-4e3f-978f-4290b35143bd' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1289824464)
+Trying to resume download...
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/230f8d942b97162d0633373db2e5d33b73172fa1dda3ce65ec477ba95aa5fd2a
+Creating pointer from ../../blobs/230f8d942b97162d0633373db2e5d33b73172fa1dda3ce65ec477ba95aa5fd2a to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00004-of-00089.safetensors
+Request 5adbaa16-a19a-46c0-b900-aceeab6c6706: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00011-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 5adbaa16-a19a-46c0-b900-aceeab6c6706' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00011-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/230bfc34d0a67f0b92d8beb3dcc94f628ebe82d82c1327f203dab9e0e99b121c
+Creating pointer from ../../blobs/230bfc34d0a67f0b92d8beb3dcc94f628ebe82d82c1327f203dab9e0e99b121c to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00001-of-00089.safetensors
+Request d98c9fc8-9f1c-4964-8695-02726398fbb8: HEAD http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00012-of-00089.safetensors (authenticated: False)
+Send: curl -X HEAD -H 'accept: */*' -H 'accept-encoding: identity' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: d98c9fc8-9f1c-4964-8695-02726398fbb8' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00012-of-00089.safetensors
+Fetching 104 files:  11%|█         | 11/104 [04:33<58:17, 37.61s/it]Fetching 104 files:  11%|█         | 11/104 [04:33<38:28, 24.82s/it]
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 1101080696)
+Trying to resume download...
+Request 57488267-58fa-4628-a8ab-c2bbc44da77d: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=3827302400-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 57488267-58fa-4628-a8ab-c2bbc44da77d' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors
+Downloading 'model-00011-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/60252cde42da7708216f8f8b9e85031c6d5a2e54f3f76baf06833a5a62346b9c.1f443f7e.incomplete'
+Request 6684cd53-eac6-4a0a-8c04-4ceffba804ec: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00011-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 6684cd53-eac6-4a0a-8c04-4ceffba804ec' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00011-of-00089.safetensors
+Downloading 'model-00012-of-00089.safetensors' to '/root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/4bd9e973e6825554a5364330b62f0cc99aecbeab4da8cbaba33174eb09d258a3.bace8dc2.incomplete'
+Request 0848517d-f541-4163-b215-29e0ef798793: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00012-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 0848517d-f541-4163-b215-29e0ef798793' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00012-of-00089.safetensors
+Request 65c0a2c0-3d38-4f1e-9926-dc8e25906919: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=4016046080-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 65c0a2c0-3d38-4f1e-9926-dc8e25906919' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors: peer closed connection without sending complete message body (received 373293056 bytes, expected 5117126936)
+Trying to resume download...
+Request 8a10f033-5883-4ed8-a890-116f41cd44e1: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=367001600-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 8a10f033-5883-4ed8-a890-116f41cd44e1' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00005-of-00089.safetensors: peer closed connection without sending complete message body (received 2097152 bytes, expected 1289824464)
+Max retries exceeded.
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 4750125336)
+Trying to resume download...
+Request 6c61415c-be12-4220-8e0e-669a94b049d4: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=367001600-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: 6c61415c-be12-4220-8e0e-669a94b049d4' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/a800e72938eb992cd81086b76dcf112bea1243cb4095e4bf8785242d1ace1a81
+Creating pointer from ../../blobs/a800e72938eb992cd81086b76dcf112bea1243cb4095e4bf8785242d1ace1a81 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00008-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00007-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 1101080696)
+Max retries exceeded.
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/763bb266a50c6303ded30cd823b3adf43f1bcd5ee1909add6df9a0bbe5f75c2a
+Creating pointer from ../../blobs/763bb266a50c6303ded30cd823b3adf43f1bcd5ee1909add6df9a0bbe5f75c2a to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00006-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 4750125336)
+Trying to resume download...
+Request c1cbb1c0-a60d-43d2-b673-0482ec6bcdd2: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=367001600-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: c1cbb1c0-a60d-43d2-b673-0482ec6bcdd2' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 4750125336)
+Trying to resume download...
+Request ecbe537f-13c5-4030-810e-55ef30118d89: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=367001600-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: ecbe537f-13c5-4030-810e-55ef30118d89' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 4750125336)
+Trying to resume download...
+Request d01dd189-1580-4fea-931f-27d47de8a6d0: GET http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors (authenticated: False)
+Send: curl -X GET -H 'accept: */*' -H 'accept-encoding: gzip, deflate' -H 'connection: keep-alive' -H 'host: com-model.nctn.ai' -H 'range: bytes=367001600-' -H 'user-agent: huggingface-cli/None; hf_hub/1.21.0; python/3.10.12' -H 'x-amzn-trace-id: d01dd189-1580-4fea-931f-27d47de8a6d0' -d http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors
+Error while downloading from http://com-model.nctn.ai/poolside/Laguna-M.1/resolve/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00009-of-00089.safetensors: peer closed connection without sending complete message body (received 6291456 bytes, expected 4750125336)
+Max retries exceeded.
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/848011466cc779a33ea374925d7d1866842eaa2743cc3e3eaa34795b63c7a3e7
+Creating pointer from ../../blobs/848011466cc779a33ea374925d7d1866842eaa2743cc3e3eaa34795b63c7a3e7 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00010-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/60252cde42da7708216f8f8b9e85031c6d5a2e54f3f76baf06833a5a62346b9c
+Creating pointer from ../../blobs/60252cde42da7708216f8f8b9e85031c6d5a2e54f3f76baf06833a5a62346b9c to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00011-of-00089.safetensors
+Download complete. Moving file to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/blobs/4bd9e973e6825554a5364330b62f0cc99aecbeab4da8cbaba33174eb09d258a3
+Creating pointer from ../../blobs/4bd9e973e6825554a5364330b62f0cc99aecbeab4da8cbaba33174eb09d258a3 to /root/.cache/huggingface/hub/models--poolside--Laguna-M.1/snapshots/4f8aa297f7866eaca7d955ee2960273d23010cd3/model-00012-of-00089.safetensors
+Traceback (most recent call last):
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_transports/default.py", line 127, in __iter__
+    for part in self._httpcore_stream:
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_sync/connection_pool.py", line 407, in __iter__
+    raise exc from None
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_sync/connection_pool.py", line 403, in __iter__
+    for part in self._stream:
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_sync/http11.py", line 342, in __iter__
+    raise exc
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_sync/http11.py", line 334, in __iter__
+    for chunk in self._connection._receive_response_body(**kwargs):
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_sync/http11.py", line 203, in _receive_response_body
+    event = self._receive_event(timeout=timeout)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_sync/http11.py", line 213, in _receive_event
+    with map_exceptions({h11.RemoteProtocolError: RemoteProtocolError}):
+  File "/usr/lib/python3.10/contextlib.py", line 153, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.RemoteProtocolError: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/vllm/.venv/bin/hf", line 10, in <module>
+    sys.exit(main())
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/cli/hf.py", line 117, in main
+    app()
+  File "/root/vllm/.venv/lib/python3.10/site-packages/typer/main.py", line 1152, in __call__
+    raise e
+  File "/root/vllm/.venv/lib/python3.10/site-packages/typer/main.py", line 1135, in __call__
+    return get_command(self)(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/click/core.py", line 1569, in __call__
+    return self.main(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/typer/core.py", line 794, in main
+    return _main(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/typer/core.py", line 188, in _main
+    rv = self.invoke(ctx)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/cli/_cli_utils.py", line 132, in invoke
+    return super().invoke(ctx)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/click/core.py", line 1970, in invoke
+    return _process_result(sub_ctx.command.invoke(sub_ctx))
+  File "/root/vllm/.venv/lib/python3.10/site-packages/click/core.py", line 1353, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/click/core.py", line 907, in invoke
+    return callback(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/typer/main.py", line 1514, in wrapper
+    return callback(**use_params)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/cli/download.py", line 254, in download
+    _print_result(run_download())
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/cli/download.py", line 216, in run_download
+    return snapshot_download(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/_snapshot_download.py", line 456, in snapshot_download
+    thread_map(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/tqdm/contrib/concurrent.py", line 69, in thread_map
+    return _executor_map(ThreadPoolExecutor, fn, *iterables, **tqdm_kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/tqdm/contrib/concurrent.py", line 51, in _executor_map
+    return list(tqdm_class(ex.map(fn, *iterables, chunksize=chunksize), **kwargs))
+  File "/root/vllm/.venv/lib/python3.10/site-packages/tqdm/std.py", line 1181, in __iter__
+    for obj in iterable:
+  File "/usr/lib/python3.10/concurrent/futures/_base.py", line 621, in result_iterator
+    yield _result_or_cancel(fs.pop())
+  File "/usr/lib/python3.10/concurrent/futures/_base.py", line 319, in _result_or_cancel
+    return fut.result(timeout)
+  File "/usr/lib/python3.10/concurrent/futures/_base.py", line 451, in result
+    return self.__get_result()
+  File "/usr/lib/python3.10/concurrent/futures/_base.py", line 403, in __get_result
+    raise self._exception
+  File "/usr/lib/python3.10/concurrent/futures/thread.py", line 58, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/_snapshot_download.py", line 436, in _inner_hf_hub_download
+    hf_hub_download(  # type: ignore
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1016, in hf_hub_download
+    return _hf_hub_download_to_cache_dir(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1238, in _hf_hub_download_to_cache_dir
+    _download_to_tmp_and_move(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 1877, in _download_to_tmp_and_move
+    http_get(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 450, in http_get
+    return http_get(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 450, in http_get
+    return http_get(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 450, in http_get
+    return http_get(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 450, in http_get
+    return http_get(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 450, in http_get
+    return http_get(
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/utils/_validators.py", line 88, in _inner_fn
+    return fn(*args, **kwargs)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/huggingface_hub/file_download.py", line 433, in http_get
+    for chunk in response.iter_bytes(chunk_size=constants.DOWNLOAD_CHUNK_SIZE):
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_models.py", line 897, in iter_bytes
+    for raw_bytes in self.iter_raw():
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_models.py", line 951, in iter_raw
+    for raw_stream_bytes in self.stream:
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_client.py", line 153, in __iter__
+    for chunk in self._stream:
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_transports/default.py", line 126, in __iter__
+    with map_httpcore_exceptions():
+  File "/usr/lib/python3.10/contextlib.py", line 153, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "/root/vllm/.venv/lib/python3.10/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.RemoteProtocolError: peer closed connection without sending complete message body (received 0 bytes, expected 1353063304)
