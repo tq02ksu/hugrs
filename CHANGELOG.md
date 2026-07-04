@@ -14,7 +14,7 @@
 - Download concurrency semaphore scoped correctly across all chunk downloads
 
 ### CI
-- GitHub Release body is now extracted from the matching changelog section
+- GitHub Release body is now extracted from the matching changelog section during publishing
 
 ## [0.6.0] - 2026-07-04
 
