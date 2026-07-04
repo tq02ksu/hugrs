@@ -142,12 +142,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate checksums
-        shell: bash
-        run: |
-          cd dist
-          sha256sum * > SHA256SUMS.txt
-
       - name: Extract changelog for this version
         shell: bash
         run: |
@@ -161,6 +155,12 @@ jobs:
             }
             found { print }
           ' CHANGELOG.md > /tmp/release_body.md
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
