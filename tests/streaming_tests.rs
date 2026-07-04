@@ -390,8 +390,7 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
 
     assert_eq!(second_collected.len(), total);
     assert_eq!(
-        second_collected,
-        test_data,
+        second_collected, test_data,
         "second full download must assemble all bytes"
     );
 }
@@ -725,7 +724,8 @@ async fn test_corrupt_cached_small_file_refetches_from_upstream() {
         "file_chunks must reflect repaired sha256 after refetch"
     );
     assert_eq!(
-        chunks[0].chunk_size, test_data.len() as i64,
+        chunks[0].chunk_size,
+        test_data.len() as i64,
         "file_chunks must reflect correct chunk_size after refetch"
     );
 

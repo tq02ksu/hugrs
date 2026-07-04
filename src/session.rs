@@ -110,10 +110,7 @@ struct ChunkReader {
 
 #[cfg(test)]
 impl ChunkReader {
-    pub(crate) fn new_for_test(
-        backend: Arc<dyn StorageBackend>,
-        verify_sha256: bool,
-    ) -> Self {
+    pub(crate) fn new_for_test(backend: Arc<dyn StorageBackend>, verify_sha256: bool) -> Self {
         let (event_tx, _) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
         Self {
             http_client: reqwest::Client::new(),
@@ -181,7 +178,11 @@ impl SessionTable {
             .cloned();
         if let Some(ref sha) = cached_sha {
             let expected_size = (end - start + 1) as usize;
-            if let Some(data) = self.reader.read_cached_chunk(sha, Some(expected_size)).await? {
+            if let Some(data) = self
+                .reader
+                .read_cached_chunk(sha, Some(expected_size))
+                .await?
+            {
                 let (tx, _) = broadcast::channel::<ChunkMessage>(1);
                 let rx = tx.subscribe();
                 let _ = tx.send(Ok(Arc::new(data)));
@@ -195,46 +196,50 @@ impl SessionTable {
         let cached_chunks = cached_chunks.clone();
         let map = self.map.clone();
 
-        let entry = self
-            .map
-            .entry(key)
-            .or_insert_with(|| {
-                let (tx, _) = broadcast::channel::<ChunkMessage>(4);
-                let tx2 = tx.clone();
-                let map = map.clone();
-                let task = tokio::spawn(async move {
-                    let result = reader
-                        .fetch_chunk(
-                            url,
-                            file_id,
-                            chunk_idx,
-                            start,
-                            end,
-                            total_size,
-                            chunk_count,
-                            user_agent,
-                            cached_chunks,
-                        )
-                        .await;
-                    match result {
-                        Ok(data) => {
-                            let _ = tx.send(Ok(Arc::new(data)));
-                        }
-                        Err(e) => {
-                            tracing::warn!("chunk {} download failed: {:?}", chunk_idx, e);
-                            let _ = tx.send(Err(Arc::new(e.to_string())));
-                        }
-                    };
-                    map.remove(&key);
-                });
-                Arc::new(ChunkSession { tx: tx2, _task: task })
+        let entry = self.map.entry(key).or_insert_with(|| {
+            let (tx, _) = broadcast::channel::<ChunkMessage>(4);
+            let tx2 = tx.clone();
+            let map = map.clone();
+            let task = tokio::spawn(async move {
+                let result = reader
+                    .fetch_chunk(
+                        url,
+                        file_id,
+                        chunk_idx,
+                        start,
+                        end,
+                        total_size,
+                        chunk_count,
+                        user_agent,
+                        cached_chunks,
+                    )
+                    .await;
+                match result {
+                    Ok(data) => {
+                        let _ = tx.send(Ok(Arc::new(data)));
+                    }
+                    Err(e) => {
+                        tracing::warn!("chunk {} download failed: {:?}", chunk_idx, e);
+                        let _ = tx.send(Err(Arc::new(e.to_string())));
+                    }
+                };
+                map.remove(&key);
             });
+            Arc::new(ChunkSession {
+                tx: tx2,
+                _task: task,
+            })
+        });
         Ok(entry.tx.subscribe())
     }
 }
 
 impl ChunkReader {
-    async fn read_cached_chunk(&self, sha256: &str, expected_chunk_size: Option<usize>) -> anyhow::Result<Option<Bytes>> {
+    async fn read_cached_chunk(
+        &self,
+        sha256: &str,
+        expected_chunk_size: Option<usize>,
+    ) -> anyhow::Result<Option<Bytes>> {
         let raw = match self.backend.get(sha256).await {
             Ok(raw) => raw,
             Err(_) => return Ok(None),

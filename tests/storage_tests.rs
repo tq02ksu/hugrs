@@ -26,7 +26,10 @@ async fn test_local_put_and_get() {
 #[tokio::test]
 async fn test_exists_must_not_return_true_before_put_completes() {
     let dir = TempDir::new().unwrap();
-    let backend = Arc::new(LocalBackend::new(dir.path().to_path_buf(), Compression::None));
+    let backend = Arc::new(LocalBackend::new(
+        dir.path().to_path_buf(),
+        Compression::None,
+    ));
 
     let data = vec![42u8; 100 * 1024 * 1024]; // 100MB to make write observable
     let sha = hugrs::chunker::sha256_hex(&data);
@@ -49,10 +52,7 @@ async fn test_exists_must_not_return_true_before_put_completes() {
 
     let result = writer.await.unwrap();
 
-    assert!(
-        result.is_ok(),
-        "put must succeed"
-    );
+    assert!(result.is_ok(), "put must succeed");
 
     assert!(
         !exists_during,

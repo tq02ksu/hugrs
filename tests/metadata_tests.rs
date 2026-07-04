@@ -505,16 +505,42 @@ fn test_ensure_chunk_and_link_replaces_old_sha_on_re_download() {
 
     let old_sha = "oldsha";
     let new_sha = "newsha";
-    store.ensure_chunk("oldsha", "local", "ol/ds/oldsha", 100, 100).unwrap();
-    store.ensure_chunk("newsha", "local", "ne/ws/newsha", 200, 200).unwrap();
+    store
+        .ensure_chunk("oldsha", "local", "ol/ds/oldsha", 100, 100)
+        .unwrap();
+    store
+        .ensure_chunk("newsha", "local", "ne/ws/newsha", 200, 200)
+        .unwrap();
 
     // First link with old_sha
-    store.ensure_chunk_and_link(old_sha, "local", "ol/ds/oldsha", 100, 100, file.id, 0, 4194304).unwrap();
+    store
+        .ensure_chunk_and_link(
+            old_sha,
+            "local",
+            "ol/ds/oldsha",
+            100,
+            100,
+            file.id,
+            0,
+            4194304,
+        )
+        .unwrap();
     let chunks = store.get_file_chunks(file.id).unwrap();
     assert_eq!(chunks[0].sha256, "oldsha");
 
     // Re-download with different sha256 should replace the old one
-    store.ensure_chunk_and_link(new_sha, "local", "ne/ws/newsha", 200, 200, file.id, 0, 4194304).unwrap();
+    store
+        .ensure_chunk_and_link(
+            new_sha,
+            "local",
+            "ne/ws/newsha",
+            200,
+            200,
+            file.id,
+            0,
+            4194304,
+        )
+        .unwrap();
     let chunks = store.get_file_chunks(file.id).unwrap();
     assert_eq!(
         chunks[0].sha256, "newsha",
@@ -527,8 +553,5 @@ fn test_ensure_chunk_and_link_replaces_old_sha_on_re_download() {
         "BUG: old sha256 ref_count should be 0 after replacement"
     );
     let new = store.get_chunk(new_sha).unwrap().unwrap();
-    assert_eq!(
-        new.ref_count, 1,
-        "BUG: new sha256 ref_count should be 1"
-    );
+    assert_eq!(new.ref_count, 1, "BUG: new sha256 ref_count should be 1");
 }
