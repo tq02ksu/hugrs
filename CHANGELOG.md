@@ -2,6 +2,9 @@
 
 ## [0.6.1] - 2026-07-04
 
+### Added
+- Byte-level cache progress reporting in `hugrsctl repo list` and `hugrsctl repo show`
+
 ### Fixed
 - Cached chunk chunk_size validation prevents serving truncated data
 - Fetch chunk size validation rejects incomplete upstream responses
@@ -9,6 +12,9 @@
 - Per-sha256 write serialization prevents TOCTOU on chunk storage
 - Chunk replacement in metadata correctly updates sha256 and ref_count on re-fetch
 - Download concurrency semaphore scoped correctly across all chunk downloads
+
+### CI
+- GitHub Release body is now extracted from the matching changelog section
 
 ## [0.6.0] - 2026-07-04
 
