@@ -630,31 +630,23 @@ async fn file_proxy_inner(
     // GET
     let get_start = std::time::Instant::now();
 
-    // Check cache and extract cached etag for validation
-    let cached_etag = {
-        if service
-            .is_file_complete(&cache_name, source)
-            .await
-            .unwrap_or(false)
-        {
-            if let Ok(Some(file)) = service.info(&cache_name, source).await {
-                let stale = range.map(|r| r.0).unwrap_or(0) >= file.total_size as u64;
-                if !stale {
-                    file.etag.clone()
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    };
+    let cached_file = service
+        .get_complete_file(&cache_name, source)
+        .await
+        .unwrap_or(None);
+    let range_stale = cached_file
+        .as_ref()
+        .map(|f| range.map(|r| r.0).unwrap_or(0) >= f.total_size as u64)
+        .unwrap_or(false);
+    let cached_etag = cached_file
+        .as_ref()
+        .filter(|_| !range_stale)
+        .and_then(|f| f.etag.clone());
 
     // Validate etag with upstream if we have a cached etag
+    let mut etag_invalid = false;
     if let Some(ref etag) = cached_etag {
-        let result = service
+        match service
             .validate_file_etag(
                 &url,
                 &cache_name,
@@ -663,14 +655,14 @@ async fn file_proxy_inner(
                 user_agent.as_deref(),
                 etag,
             )
-            .await;
-
-        match result {
+            .await
+        {
             Ok(true) => {
                 tracing::debug!("GET etag validated: {}", cache_name);
             }
             Ok(false) => {
                 tracing::info!("GET etag changed, invalidating: {}", cache_name);
+                etag_invalid = true;
                 let _ = service.metadata.delete_file(&cache_name, source);
                 // Fall through to stream_from_upstream
             }
@@ -687,46 +679,39 @@ async fn file_proxy_inner(
     // If-None-Match: return 304 if client's etag matches our validated cache
     if let (Some(ref inm), Some(ref etag)) = (&if_none_match, &cached_etag) {
         if etag_matches_any(etag, inm) {
-            if let Ok(Some(file)) = service.info(&cache_name, source).await {
+            if let Some(ref file) = cached_file {
                 tracing::debug!("If-None-Match hit, returning 304: {}", cache_name);
-                return build_304_response(&file);
+                return build_304_response(file);
             }
         }
     }
 
-    // Serve from cache if still complete
-    {
-        if service
-            .is_file_complete(&cache_name, source)
-            .await
-            .unwrap_or(false)
-        {
-            if let Ok(Some(file)) = service.info(&cache_name, source).await {
-                let stale = range.map(|r| r.0).unwrap_or(0) >= file.total_size as u64;
-                if !stale {
-                    tracing::debug!("GET cache hit (streaming): {}", cache_name);
-                    let (file, content_length, stream) = service
-                        .stream_http_file(
-                            &url,
-                            &file,
-                            range.map(|r| r.0),
-                            range.and_then(|r| r.1),
-                            user_agent.as_deref(),
-                        )
-                        .await?;
-                    tracing::info!(
-                        "{}: cache hit, stream ready in {}ms",
-                        cache_name,
-                        get_start.elapsed().as_millis()
-                    );
-                    return build_stream_response(file, content_length, stream, &path, range);
-                }
-                tracing::debug!(
-                    "GET cache stale (range beyond cached size), refreshing from upstream: {}",
-                    cache_name
-                );
-            }
+    // Serve from cache if complete and range valid (unless etag was invalidated)
+    if let Some(ref file) = cached_file {
+        if !etag_invalid && !range_stale {
+            tracing::debug!("GET cache hit (streaming): {}", cache_name);
+            let (file, content_length, stream) = service
+                .stream_http_file(
+                    &url,
+                    file,
+                    range.map(|r| r.0),
+                    range.and_then(|r| r.1),
+                    user_agent.as_deref(),
+                )
+                .await?;
+            tracing::info!(
+                "{}: cache hit, stream ready in {}ms",
+                cache_name,
+                get_start.elapsed().as_millis()
+            );
+            return build_stream_response(file, content_length, stream, &path, range);
         }
+        tracing::debug!(
+            "GET cache not served (invalid={}, stale={}), refreshing: {}",
+            etag_invalid,
+            range_stale,
+            cache_name
+        );
     }
 
     tracing::info!("cache miss, streaming via upstream: {}", cache_name);

@@ -425,13 +425,24 @@ impl CacheService {
     }
 
     pub async fn is_file_complete(&self, name: &str, source: &str) -> anyhow::Result<bool> {
+        Ok(self.get_complete_file(name, source).await?.is_some())
+    }
+
+    pub async fn get_complete_file(
+        &self,
+        name: &str,
+        source: &str,
+    ) -> anyhow::Result<Option<File>> {
         let file = match self.metadata.get_file_by_name(name, source)? {
             Some(f) => f,
-            None => return Ok(false),
+            None => return Ok(None),
         };
-
         let downloaded = self.metadata.get_file_downloaded_size(file.id)?;
-        Ok(downloaded >= file.total_size)
+        if downloaded >= file.total_size {
+            Ok(Some(file))
+        } else {
+            Ok(None)
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
