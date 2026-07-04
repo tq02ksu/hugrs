@@ -188,6 +188,9 @@ impl SessionTable {
                 let _ = tx.send(Ok(Arc::new(data)));
                 return Ok(rx);
             }
+            cached_chunks
+                .lock_or_recover()
+                .remove(&(chunk_idx as usize));
         }
 
         let reader = self.reader.clone();
@@ -814,6 +817,8 @@ mod tests {
     use tempfile::TempDir;
     use tokio::task::JoinHandle;
 
+    use axum::{extract::State as AxumState, http::StatusCode, routing::get, Router};
+
     fn dummy_file() -> File {
         File {
             id: 1,
@@ -997,5 +1002,113 @@ mod tests {
              Must return None to trigger re-fetch.",
             super::CHUNK_SIZE
         );
+    }
+
+    #[derive(Clone)]
+    struct SubscribeTestState {
+        chunk_data: Arc<Vec<u8>>,
+    }
+
+    async fn serve_full_file(
+        AxumState(state): AxumState<SubscribeTestState>,
+    ) -> axum::response::Response {
+        axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Length", state.chunk_data.len())
+            .header("Content-Type", "application/octet-stream")
+            .body(axum::body::Body::from(state.chunk_data.to_vec()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn subscribe_clears_cached_chunks_when_corruption_detected() {
+        let _dir = TempDir::new().unwrap();
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ));
+
+        let corrupted = b"";
+        let corrupted_sha = crate::chunker::sha256_hex(corrupted);
+        backend.put(&corrupted_sha, corrupted).await.unwrap();
+
+        let cached_chunks = Arc::new(StdMutex::new(HashMap::from([(
+            0usize,
+            corrupted_sha.clone(),
+        )])));
+
+        let test_data: Vec<u8> = (0..super::CHUNK_SIZE)
+            .map(|i| (i as u8).wrapping_mul(13).wrapping_add(47))
+            .collect();
+        let state = SubscribeTestState {
+            chunk_data: Arc::new(test_data.clone()),
+        };
+
+        let app = Router::new()
+            .route("/test.bin", get(serve_full_file))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("http://{addr}/test.bin");
+
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        let session_table = Arc::new(super::SessionTable::new(
+            reqwest::Client::new(),
+            backend,
+            event_tx,
+            Arc::new(AtomicU64::new(0)),
+            true,
+        ));
+
+        let mut rx = session_table
+            .subscribe(
+                1,
+                0,
+                &url,
+                0,
+                (super::CHUNK_SIZE - 1) as u64,
+                super::CHUNK_SIZE as u64,
+                1,
+                None,
+                &cached_chunks,
+            )
+            .await
+            .unwrap();
+
+        {
+            let ck = cached_chunks.lock_or_recover();
+            assert!(
+                !ck.contains_key(&0),
+                "subscribe must clear stale cached_chunks entry after corruption detection, \
+                 so that fetch_chunk does not compare fresh data against the stale sha256; \
+                 found: {:?}",
+                ck.get(&0)
+            );
+        }
+
+        match rx.recv().await {
+            Ok(Ok(data)) => {
+                assert_eq!(
+                    data.len(),
+                    super::CHUNK_SIZE,
+                    "expected full chunk from upstream after corruption was cleared"
+                );
+            }
+            Ok(Err(e)) => {
+                panic!(
+                    "chunk download should succeed after clearing stale cached_chunks, but got error: {}",
+                    e
+                );
+            }
+            Err(e) => {
+                panic!("receiver closed unexpectedly: {e}");
+            }
+        }
     }
 }
