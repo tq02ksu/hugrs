@@ -131,11 +131,26 @@ jobs:
           cd dist
           sha256sum * > SHA256SUMS.txt
 
+      - name: Extract changelog for this version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"       # v0.6.0
+          VER="${TAG#v}"                        # 0.6.0
+          # Extract the section between "## [<VER>]" and the next "## ["
+          awk -v ver="$VER" '
+            /^## \[/ {
+              if (found) exit;
+              if ($0 ~ "^## \\[" ver "\\]") found=1;
+              next;
+            }
+            found { print }
+          ' CHANGELOG.md > /tmp/release_body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: /tmp/release_body.md
 
   docker:
     runs-on: ubuntu-latest
