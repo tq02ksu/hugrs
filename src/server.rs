@@ -1130,23 +1130,31 @@ async fn control_repos_list(
     }
     let items: Vec<RepoListItem> = grouped
         .into_iter()
-        .map(|(repo, entries)| RepoListItem {
-            repo,
-            sources: entries
+        .map(|(repo, entries)| {
+            let file_items = aggregate_files(&service.metadata, &entries)?;
+            let sources = entries
                 .iter()
                 .map(|f| f.source.clone())
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
-                .collect(),
-            files: entries.len(),
-            logical_bytes: entries.iter().map(|f| f.total_size).sum(),
-            last_accessed: entries
+                .collect();
+            let last_accessed = entries
                 .iter()
                 .map(|f| f.last_accessed.clone())
                 .max()
-                .unwrap_or_default(),
+                .unwrap_or_default();
+            let logical_bytes: i64 = file_items.iter().map(|i| i.size).sum();
+            let downloaded_bytes: i64 = file_items.iter().map(|i| i.downloaded_size).sum();
+            Ok(RepoListItem {
+                repo,
+                sources,
+                files: file_items.len(),
+                logical_bytes,
+                downloaded_bytes,
+                last_accessed,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, AppError>>()?;
     Ok(Json(RepoListResponse {
         total: items.len(),
         items,
@@ -1179,11 +1187,14 @@ async fn control_repo_show(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
+    let logical_bytes: i64 = items.iter().map(|i| i.size).sum();
+    let downloaded_bytes: i64 = items.iter().map(|i| i.downloaded_size).sum();
     Ok(Json(RepoShowResponse {
         repo,
         sources,
         files: items.len(),
-        logical_bytes: matched.iter().map(|f| f.total_size).sum(),
+        logical_bytes,
+        downloaded_bytes,
         last_accessed: matched
             .iter()
             .map(|f| f.last_accessed.clone())

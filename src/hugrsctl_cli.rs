@@ -326,9 +326,16 @@ fn print_repo_show(json: bool, value: &RepoShowResponse) {
         return;
     }
 
+    let complete = value.logical_bytes <= 0 && value.downloaded_bytes <= 0
+        || value.downloaded_bytes >= value.logical_bytes;
+
     println!("repo: {}", value.repo);
     println!("sources: {}", value.sources.join(","));
     println!("files: {}", value.files);
+    println!(
+        "cached: {}",
+        format_progress_detail(value.downloaded_bytes, value.logical_bytes, complete)
+    );
     println!("logical size: {}", format_bytes_i64(value.logical_bytes));
     println!("last accessed: {}", value.last_accessed);
     println!();
@@ -416,6 +423,11 @@ fn print_repo_table(rows: &[RepoRow]) {
             .map(|r| r.files.as_str())
             .chain(std::iter::once("FILES")),
     );
+    let cached_w = column_width(
+        rows.iter()
+            .map(|r| r.cached.as_str())
+            .chain(std::iter::once("CACHED")),
+    );
     let size_w = column_width(
         rows.iter()
             .map(|r| r.logical_size.as_str())
@@ -423,13 +435,13 @@ fn print_repo_table(rows: &[RepoRow]) {
     );
 
     println!(
-        "{:<repo_w$}  {:<source_w$}  {:>files_w$}  {:>size_w$}  LAST ACCESSED",
-        "REPO", "SOURCES", "FILES", "LOGICAL SIZE",
+        "{:<repo_w$}  {:<source_w$}  {:>files_w$}  {:>cached_w$}  {:>size_w$}  LAST ACCESSED",
+        "REPO", "SOURCES", "FILES", "CACHED", "LOGICAL SIZE",
     );
     for row in rows {
         println!(
-            "{:<repo_w$}  {:<source_w$}  {:>files_w$}  {:>size_w$}  {}",
-            row.repo, row.sources, row.files, row.logical_size, row.last_accessed,
+            "{:<repo_w$}  {:<source_w$}  {:>files_w$}  {:>cached_w$}  {:>size_w$}  {}",
+            row.repo, row.sources, row.files, row.cached, row.logical_size, row.last_accessed,
         );
     }
 }
@@ -585,10 +597,13 @@ fn column_width<'a>(values: impl Iterator<Item = &'a str>) -> usize {
 }
 
 fn repo_row(item: &crate::control::RepoListItem) -> RepoRow {
+    let complete = item.logical_bytes <= 0 && item.downloaded_bytes <= 0
+        || item.downloaded_bytes >= item.logical_bytes;
     RepoRow {
         repo: item.repo.clone(),
         sources: join_sources(&item.sources),
         files: item.files.to_string(),
+        cached: format_progress_detail(item.downloaded_bytes, item.logical_bytes, complete),
         logical_size: format_bytes_i64(item.logical_bytes),
         last_accessed: item.last_accessed.clone(),
     }
@@ -598,6 +613,7 @@ struct RepoRow {
     repo: String,
     sources: String,
     files: String,
+    cached: String,
     logical_size: String,
     last_accessed: String,
 }

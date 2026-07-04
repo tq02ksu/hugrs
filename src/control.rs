@@ -59,6 +59,7 @@ pub struct RepoListItem {
     pub sources: Vec<String>,
     pub files: usize,
     pub logical_bytes: i64,
+    pub downloaded_bytes: i64,
     pub last_accessed: String,
 }
 
@@ -68,6 +69,7 @@ pub struct RepoShowResponse {
     pub sources: Vec<String>,
     pub files: usize,
     pub logical_bytes: i64,
+    pub downloaded_bytes: i64,
     pub last_accessed: String,
     pub items: Vec<FileListItem>,
 }
