@@ -105,6 +105,33 @@ struct ChunkReader {
     event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
     fetched_bytes: Arc<AtomicU64>,
     verify_sha256: bool,
+    write_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
+}
+
+#[cfg(test)]
+impl ChunkReader {
+    pub(crate) fn new_for_test(
+        backend: Arc<dyn StorageBackend>,
+        verify_sha256: bool,
+    ) -> Self {
+        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        Self {
+            http_client: reqwest::Client::new(),
+            backend,
+            event_tx,
+            fetched_bytes: Arc::new(AtomicU64::new(0)),
+            verify_sha256,
+            write_locks: DashMap::new(),
+        }
+    }
+
+    pub(crate) async fn read_cached_chunk_test(
+        &self,
+        sha256: &str,
+        expected_chunk_size: Option<usize>,
+    ) -> anyhow::Result<Option<Bytes>> {
+        self.read_cached_chunk(sha256, expected_chunk_size).await
+    }
 }
 
 pub struct SessionTable {
@@ -128,6 +155,7 @@ impl SessionTable {
                 event_tx,
                 fetched_bytes,
                 verify_sha256,
+                write_locks: DashMap::new(),
             }),
         }
     }
@@ -147,16 +175,13 @@ impl SessionTable {
     ) -> anyhow::Result<broadcast::Receiver<ChunkMessage>> {
         let key = (file_id, chunk_idx);
 
-        if let Some(session) = self.map.get(&key) {
-            return Ok(session.tx.subscribe());
-        }
-
         let cached_sha = cached_chunks
             .lock_or_recover()
             .get(&(chunk_idx as usize))
             .cloned();
         if let Some(ref sha) = cached_sha {
-            if let Some(data) = self.reader.read_cached_chunk(sha).await? {
+            let expected_size = (end - start + 1) as usize;
+            if let Some(data) = self.reader.read_cached_chunk(sha, Some(expected_size)).await? {
                 let (tx, _) = broadcast::channel::<ChunkMessage>(1);
                 let rx = tx.subscribe();
                 let _ = tx.send(Ok(Arc::new(data)));
@@ -164,58 +189,52 @@ impl SessionTable {
             }
         }
 
-        if let Some(session) = self.map.get(&key) {
-            return Ok(session.tx.subscribe());
-        }
-
-        let (tx, _) = broadcast::channel::<ChunkMessage>(4);
-        let rx = tx.subscribe();
-
         let reader = self.reader.clone();
         let url = url.to_string();
-        let tx2 = tx.clone();
-        let map = self.map.clone();
         let user_agent = user_agent.map(str::to_string);
         let cached_chunks = cached_chunks.clone();
-        let task = tokio::spawn(async move {
-            let result = reader
-                .fetch_chunk(
-                    url,
-                    file_id,
-                    chunk_idx,
-                    start,
-                    end,
-                    total_size,
-                    chunk_count,
-                    user_agent,
-                    cached_chunks,
-                )
-                .await;
-            match result {
-                Ok(data) => {
-                    let _ = tx.send(Ok(Arc::new(data)));
-                }
-                Err(e) => {
-                    tracing::warn!("chunk {} download failed: {:?}", chunk_idx, e);
-                    let _ = tx.send(Err(Arc::new(e.to_string())));
-                }
-            };
-            map.remove(&key);
-        });
+        let map = self.map.clone();
 
-        self.map.insert(
-            key,
-            Arc::new(ChunkSession {
-                tx: tx2,
-                _task: task,
-            }),
-        );
-        Ok(rx)
+        let entry = self
+            .map
+            .entry(key)
+            .or_insert_with(|| {
+                let (tx, _) = broadcast::channel::<ChunkMessage>(4);
+                let tx2 = tx.clone();
+                let map = map.clone();
+                let task = tokio::spawn(async move {
+                    let result = reader
+                        .fetch_chunk(
+                            url,
+                            file_id,
+                            chunk_idx,
+                            start,
+                            end,
+                            total_size,
+                            chunk_count,
+                            user_agent,
+                            cached_chunks,
+                        )
+                        .await;
+                    match result {
+                        Ok(data) => {
+                            let _ = tx.send(Ok(Arc::new(data)));
+                        }
+                        Err(e) => {
+                            tracing::warn!("chunk {} download failed: {:?}", chunk_idx, e);
+                            let _ = tx.send(Err(Arc::new(e.to_string())));
+                        }
+                    };
+                    map.remove(&key);
+                });
+                Arc::new(ChunkSession { tx: tx2, _task: task })
+            });
+        Ok(entry.tx.subscribe())
     }
 }
 
 impl ChunkReader {
-    async fn read_cached_chunk(&self, sha256: &str) -> anyhow::Result<Option<Bytes>> {
+    async fn read_cached_chunk(&self, sha256: &str, expected_chunk_size: Option<usize>) -> anyhow::Result<Option<Bytes>> {
         let raw = match self.backend.get(sha256).await {
             Ok(raw) => raw,
             Err(_) => return Ok(None),
@@ -233,6 +252,17 @@ impl ChunkReader {
         .map_err(|e| anyhow::anyhow!("sha256 panicked: {e}"))?;
 
         if actual == sha256 {
+            if let Some(expected) = expected_chunk_size {
+                if raw.len() != expected {
+                    tracing::error!(
+                        "chunk size mismatch: sha256 matches but len={} != expected={}",
+                        raw.len(),
+                        expected
+                    );
+                    let _ = self.backend.delete(sha256).await;
+                    return Ok(None);
+                }
+            }
             return Ok(Some(Bytes::from(raw)));
         }
 
@@ -273,6 +303,15 @@ impl ChunkReader {
             .await
             .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} download error: {e}"))?;
 
+        let expected_len = (end - start + 1) as usize;
+        if data.len() != expected_len {
+            anyhow::bail!(
+                "chunk {chunk_idx} download incomplete: expected {} bytes, got {}",
+                expected_len,
+                data.len()
+            );
+        }
+
         self.fetched_bytes
             .fetch_add(data.len() as u64, Ordering::Relaxed);
 
@@ -301,6 +340,12 @@ impl ChunkReader {
             );
         }
 
+        let lock = self
+            .write_locks
+            .entry(sha256.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
         let stored_size: i64 = if !self.backend.exists(&sha256).await.unwrap_or(false) {
             self.backend.put(&sha256, &data).await? as i64
         } else {
@@ -919,5 +964,33 @@ mod tests {
 
         assert_eq!(active, 1);
         assert_eq!(session.prefetch_active(), 1);
+    }
+
+    #[tokio::test]
+    async fn read_cached_chunk_rejects_incomplete_data_even_when_sha256_matches() {
+        let _dir = TempDir::new().unwrap();
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ));
+
+        let incomplete = b"";
+        let incomplete_sha = crate::chunker::sha256_hex(incomplete);
+
+        backend.put(&incomplete_sha, incomplete).await.unwrap();
+
+        let reader = super::ChunkReader::new_for_test(backend, true);
+
+        let result = reader
+            .read_cached_chunk_test(&incomplete_sha, Some(super::CHUNK_SIZE))
+            .await
+            .unwrap();
+        assert!(
+            result.is_none(),
+            "sha256 matches but data.len()=0 != expected_chunk_size={}. \
+             Must return None to trigger re-fetch.",
+            super::CHUNK_SIZE
+        );
     }
 }

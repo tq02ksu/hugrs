@@ -338,12 +338,13 @@ impl CacheService {
         );
 
         let mut handles = Vec::with_capacity(missing.len());
+        let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
         for &i in &missing {
             let start = (i * CHUNK_SIZE) as u64;
             let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
             let downstream_url = downstream_url.clone();
             let client = self.http_client.clone();
-            let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
+            let concurrency_sem = concurrency_sem.clone();
             let fetched_bytes = self.fetched_bytes.clone();
 
             handles.push(tokio::spawn(async move {

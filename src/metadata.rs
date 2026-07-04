@@ -460,11 +460,27 @@ impl MetadataStore {
             "INSERT OR IGNORE INTO chunks (sha256, backend, path, size, compressed_size, orphaned_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))",
             params![sha256, backend, path, size, compressed_size],
         )?;
-        let inserted = tx.execute(
-            "INSERT OR IGNORE INTO file_chunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
-            params![file_id, sha256, chunk_index, chunk_size],
-        )?;
-        if inserted > 0 {
+
+        let old_sha: Option<String> = tx
+            .query_row(
+                "SELECT sha256 FROM file_chunks WHERE file_id = ?1 AND chunk_index = ?2",
+                params![file_id, chunk_index],
+                |row| row.get(0),
+            )
+            .ok();
+        if let Some(ref old) = old_sha {
+            if old != sha256 {
+                tx.execute(
+                    "UPDATE chunks SET ref_count = MAX(0, ref_count - 1) WHERE sha256 = ?1",
+                    params![old],
+                )?;
+            }
+        }
+        if old_sha.is_none() || old_sha.as_ref().map(|o| o != sha256).unwrap_or(false) {
+            tx.execute(
+                "INSERT OR REPLACE INTO file_chunks (file_id, sha256, chunk_index, chunk_size) VALUES (?1, ?2, ?3, ?4)",
+                params![file_id, sha256, chunk_index, chunk_size],
+            )?;
             tx.execute(
                 "UPDATE chunks SET ref_count = ref_count + 1, orphaned_at = NULL WHERE sha256 = ?1",
                 params![sha256],

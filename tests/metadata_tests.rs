@@ -496,3 +496,39 @@ fn test_migration_from_old_unique_name_schema() {
     let ms = store.get_file_by_name("model.bin", "ms").unwrap().unwrap();
     assert_eq!(ms.total_size, 200);
 }
+
+#[test]
+fn test_ensure_chunk_and_link_replaces_old_sha_on_re_download() {
+    let dir = TempDir::new().unwrap();
+    let store = MetadataStore::new(&dir.path().join("test.db")).unwrap();
+    let file = store.add_file("f.bin", "r", 4194304, "hf").unwrap();
+
+    let old_sha = "oldsha";
+    let new_sha = "newsha";
+    store.ensure_chunk("oldsha", "local", "ol/ds/oldsha", 100, 100).unwrap();
+    store.ensure_chunk("newsha", "local", "ne/ws/newsha", 200, 200).unwrap();
+
+    // First link with old_sha
+    store.ensure_chunk_and_link(old_sha, "local", "ol/ds/oldsha", 100, 100, file.id, 0, 4194304).unwrap();
+    let chunks = store.get_file_chunks(file.id).unwrap();
+    assert_eq!(chunks[0].sha256, "oldsha");
+
+    // Re-download with different sha256 should replace the old one
+    store.ensure_chunk_and_link(new_sha, "local", "ne/ws/newsha", 200, 200, file.id, 0, 4194304).unwrap();
+    let chunks = store.get_file_chunks(file.id).unwrap();
+    assert_eq!(
+        chunks[0].sha256, "newsha",
+        "BUG: ensure_chunk_and_link with new sha256 must replace old entry"
+    );
+
+    let old = store.get_chunk(old_sha).unwrap().unwrap();
+    assert_eq!(
+        old.ref_count, 0,
+        "BUG: old sha256 ref_count should be 0 after replacement"
+    );
+    let new = store.get_chunk(new_sha).unwrap().unwrap();
+    assert_eq!(
+        new.ref_count, 1,
+        "BUG: new sha256 ref_count should be 1"
+    );
+}
