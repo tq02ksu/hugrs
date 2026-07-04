@@ -87,6 +87,88 @@ pub struct CacheService {
     fs_manager: Arc<crate::session::FileSessionManager>,
 }
 
+async fn run_gc_batch(
+    metadata: &MetadataStore,
+    backend: &dyn StorageBackend,
+    batch_size: usize,
+) -> anyhow::Result<GcResult> {
+    let mut orphans = metadata.list_orphan_chunks_batch(batch_size + 1)?;
+    let mut result = GcResult {
+        has_more: orphans.len() > batch_size,
+        ..GcResult::default()
+    };
+    if result.has_more {
+        orphans.truncate(batch_size);
+    }
+    let mut deleted_sha256s = Vec::with_capacity(orphans.len());
+
+    for chunk in orphans {
+        if chunk.ref_count != 0 {
+            result.skipped_chunks += 1;
+            continue;
+        }
+        backend.delete(&chunk.sha256).await?;
+        let reclaimed = chunk.compressed_size.unwrap_or(chunk.size) as u64;
+        deleted_sha256s.push((chunk.sha256, reclaimed));
+    }
+
+    if !deleted_sha256s.is_empty() {
+        let deleted = metadata.delete_chunks_batch(
+            &deleted_sha256s
+                .iter()
+                .map(|(sha256, _)| sha256.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        for sha256 in deleted {
+            if let Some((_, reclaimed)) = deleted_sha256s.iter().find(|(s, _)| s == &sha256) {
+                result.deleted_chunks += 1;
+                result.reclaimed_bytes += reclaimed;
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+async fn run_eviction(
+    metadata: &MetadataStore,
+    backend: &dyn StorageBackend,
+    max_size: u64,
+) -> anyhow::Result<()> {
+    loop {
+        let freed = run_gc_batch(metadata, backend, 32).await?;
+        if freed.deleted_chunks > 0 {
+            let stats = metadata.get_stats()?;
+            if stats.original_bytes as u64 <= max_size {
+                break;
+            }
+            continue;
+        }
+
+        let stats = metadata.get_stats()?;
+        if stats.original_bytes as u64 <= max_size {
+            break;
+        }
+
+        let candidates = metadata.list_repos_by_access(10)?;
+        if candidates.is_empty() {
+            break;
+        }
+
+        let victim_repo = &candidates[0];
+        let deleted = metadata.delete_files_by_repo(victim_repo)?;
+        tracing::warn!(
+            "Evicted repo '{}' ({} files, {} bytes total)",
+            victim_repo,
+            deleted,
+            stats.original_bytes
+        );
+
+        let _ = run_gc_batch(metadata, backend, 32).await?;
+    }
+    Ok(())
+}
+
 impl CacheService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -272,42 +354,7 @@ impl CacheService {
     }
 
     pub async fn gc_execute_batch(&self, batch_size: usize) -> anyhow::Result<GcResult> {
-        let mut orphans = self.metadata.list_orphan_chunks_batch(batch_size + 1)?;
-        let mut result = GcResult {
-            has_more: orphans.len() > batch_size,
-            ..GcResult::default()
-        };
-        if result.has_more {
-            orphans.truncate(batch_size);
-        }
-        let mut deleted_sha256s = Vec::with_capacity(orphans.len());
-
-        for chunk in orphans {
-            if chunk.ref_count != 0 {
-                result.skipped_chunks += 1;
-                continue;
-            }
-            self.backend.delete(&chunk.sha256).await?;
-            let reclaimed = chunk.compressed_size.unwrap_or(chunk.size) as u64;
-            deleted_sha256s.push((chunk.sha256, reclaimed));
-        }
-
-        if !deleted_sha256s.is_empty() {
-            let deleted = self.metadata.delete_chunks_batch(
-                &deleted_sha256s
-                    .iter()
-                    .map(|(sha256, _)| sha256.clone())
-                    .collect::<Vec<_>>(),
-            )?;
-            for sha256 in deleted {
-                if let Some((_, reclaimed)) = deleted_sha256s.iter().find(|(s, _)| s == &sha256) {
-                    result.deleted_chunks += 1;
-                    result.reclaimed_bytes += reclaimed;
-                }
-            }
-        }
-
-        Ok(result)
+        run_gc_batch(&self.metadata, &*self.backend, batch_size).await
     }
 
     pub async fn gc_execute(&self) -> anyhow::Result<GcResult> {
@@ -315,41 +362,7 @@ impl CacheService {
     }
 
     pub async fn evict_if_needed(&self, max_size: u64) -> anyhow::Result<()> {
-        loop {
-            // Step 1: try GC alone first — reclaim orphans from prior deletions
-            let freed = self.gc_execute().await?;
-            if freed.deleted_chunks > 0 {
-                let stats = self.metadata.get_stats()?;
-                if stats.original_bytes as u64 <= max_size {
-                    break;
-                }
-                // Still over limit, loop back and try GC again or evict
-                continue;
-            }
-
-            // Step 2: GC reclaimed nothing — evict the LRU repo
-            let stats = self.metadata.get_stats()?;
-            if stats.original_bytes as u64 <= max_size {
-                break;
-            }
-
-            let candidates = self.metadata.list_repos_by_access(10)?;
-            if candidates.is_empty() {
-                break;
-            }
-
-            let victim_repo = &candidates[0];
-            let deleted = self.metadata.delete_files_by_repo(victim_repo)?;
-            tracing::warn!(
-                "Evicted repo '{}' ({} files, {} bytes total)",
-                victim_repo,
-                deleted,
-                stats.original_bytes
-            );
-
-            let _ = self.gc_execute().await?;
-        }
-        Ok(())
+        run_eviction(&self.metadata, &*self.backend, max_size).await
     }
 
     pub async fn backend_exists(&self, key: &str) -> anyhow::Result<bool> {
@@ -572,6 +585,13 @@ impl CacheService {
             .iter()
             .map(|fc| (fc.chunk_index as usize, fc.sha256.clone()))
             .collect();
+
+        let expected = (total_size as usize).div_ceil(CHUNK_SIZE);
+        if cached_chunks.len() < expected {
+            if let Some(limit) = self.max_size {
+                self.evict_if_needed(limit).await?;
+            }
+        }
 
         let session = self.fs_manager.get_or_create(
             file.id,
