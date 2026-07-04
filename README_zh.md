@@ -1,5 +1,15 @@
 # HugRS
 
+[![CI](https://github.com/tq02ksu/hugrs/actions/workflows/ci.yml/badge.svg)](https://github.com/tq02ksu/hugrs/actions/workflows/ci.yml)
+[![Security](https://github.com/tq02ksu/hugrs/actions/workflows/security.yml/badge.svg)](https://github.com/tq02ksu/hugrs/actions/workflows/security.yml)
+[![Release](https://github.com/tq02ksu/hugrs/actions/workflows/release.yml/badge.svg)](https://github.com/tq02ksu/hugrs/actions/workflows/release.yml)
+[![GitHub release](https://img.shields.io/github/v/release/tq02ksu/hugrs)](https://github.com/tq02ksu/hugrs/releases)
+[![GHCR](https://img.shields.io/badge/GHCR-hugrs-2496ED?logo=docker&logoColor=white)](https://github.com/tq02ksu/hugrs/pkgs/container/hugrs)
+[![License](https://img.shields.io/github/license/tq02ksu/hugrs)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-2ea44f)](https://github.com/tq02ksu/hugrs/releases)
+[![Rust](https://img.shields.io/badge/rust-1.96%2B-orange?logo=rust)](https://github.com/tq02ksu/hugrs/blob/master/Cargo.toml)
+[![Homebrew](https://img.shields.io/badge/Homebrew-tq02ksu%2Ftap-FBB040?logo=homebrew&logoColor=white)](https://github.com/tq02ksu/homebrew-tap)
+
 高性能 HuggingFace & ModelScope 模型镜像服务。基于 prefetch + 内容寻址架构，读时 SHA256 校验数据完整性，内置分块去重与压缩，保障大模型供应链安全与高速访问。
 
 ![HugRS Overview](docs/poster.png)
