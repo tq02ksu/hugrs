@@ -48,7 +48,7 @@ pub async fn run(
     let http_client = hf::build_client(&config)?;
     let head_client = hf::build_head_client(&config)?;
     let app_state = AppState {
-        service: Arc::new(Mutex::new(service)),
+        service: Arc::new(service),
         config: Arc::new(config),
         admin_token: Arc::new(admin_token),
         http_client: Arc::new(http_client),
@@ -180,7 +180,7 @@ pub fn app_router(app_state: AppState) -> Router {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub service: Arc<Mutex<CacheService>>,
+    pub service: Arc<CacheService>,
     pub config: Arc<Config>,
     pub admin_token: Arc<String>,
     pub http_client: Arc<reqwest::Client>,
@@ -575,8 +575,7 @@ async fn file_proxy_inner(
     user_agent: Option<String>,
     _first_hop_get: bool,
 ) -> Result<Response, AppError> {
-    let (_endpoint, http_client, _head_client) = hub_config(&state, source);
-    let service = { state.service.lock().await.clone() };
+    let service = state.service.clone();
     let repo_id = {
         let parts: Vec<&str> = cache_name.splitn(3, '/').collect();
         if parts.len() >= 2 {
@@ -633,7 +632,6 @@ async fn file_proxy_inner(
 
     // Check cache and extract cached etag for validation
     let cached_etag = {
-        let service = state.service.lock().await;
         if service
             .is_file_complete(&cache_name, source)
             .await
@@ -656,19 +654,16 @@ async fn file_proxy_inner(
 
     // Validate etag with upstream if we have a cached etag
     if let Some(ref etag) = cached_etag {
-        let result = {
-            let service = state.service.lock().await;
-            service
-                .validate_file_etag(
-                    &url,
-                    &cache_name,
-                    &repo_id,
-                    source,
-                    user_agent.as_deref(),
-                    etag,
-                )
-                .await
-        };
+        let result = service
+            .validate_file_etag(
+                &url,
+                &cache_name,
+                &repo_id,
+                source,
+                user_agent.as_deref(),
+                etag,
+            )
+            .await;
 
         match result {
             Ok(true) => {
@@ -676,9 +671,7 @@ async fn file_proxy_inner(
             }
             Ok(false) => {
                 tracing::info!("GET etag changed, invalidating: {}", cache_name);
-                let service = state.service.lock().await;
                 let _ = service.metadata.delete_file(&cache_name, source);
-                drop(service);
                 // Fall through to stream_from_upstream
             }
             Err(e) => {
@@ -694,7 +687,6 @@ async fn file_proxy_inner(
     // If-None-Match: return 304 if client's etag matches our validated cache
     if let (Some(ref inm), Some(ref etag)) = (&if_none_match, &cached_etag) {
         if etag_matches_any(etag, inm) {
-            let service = state.service.lock().await;
             if let Ok(Some(file)) = service.info(&cache_name, source).await {
                 tracing::debug!("If-None-Match hit, returning 304: {}", cache_name);
                 return build_304_response(&file);
@@ -704,7 +696,6 @@ async fn file_proxy_inner(
 
     // Serve from cache if still complete
     {
-        let service = state.service.lock().await;
         if service
             .is_file_complete(&cache_name, source)
             .await
@@ -740,45 +731,46 @@ async fn file_proxy_inner(
 
     tracing::info!("cache miss, streaming via upstream: {}", cache_name);
 
-    let mut probe = http_client.get(&url);
-    if let Some(ref ua) = user_agent {
-        probe = probe.header("User-Agent", ua);
-    }
-    let probe_resp = probe.send().await.map_err(|e| AppError::Anyhow(e.into()))?;
-    let probe_status = probe_resp.status();
-    if !probe_status.is_success() && !probe_status.is_redirection() {
-        let upstream_headers: Vec<(String, String)> = probe_resp
-            .headers()
-            .iter()
-            .filter(|(n, _)| *n != "transfer-encoding")
-            .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
-            .collect();
-        let body = probe_resp
-            .bytes()
-            .await
-            .map_err(|e| AppError::Anyhow(e.into()))?;
-        let mut builder = Response::builder().status(probe_status);
-        for (name, value) in &upstream_headers {
-            builder = builder.header(name, value);
+    let metadata = match service
+        .probe_file_metadata(&url, source, user_agent.as_deref())
+        .await
+        .map_err(AppError::Anyhow)?
+    {
+        MetadataProbeResult::Metadata(metadata) => metadata,
+        MetadataProbeResult::UpstreamFailure(failure) => {
+            let body = {
+                let mut req = service.http_client.get(&url);
+                if let Some(ref ua) = user_agent {
+                    req = req.header("User-Agent", ua);
+                }
+                let resp = req.send().await;
+                match resp {
+                    Ok(r) => r.bytes().await.unwrap_or_default(),
+                    Err(_) => bytes::Bytes::new(),
+                }
+            };
+            let mut builder = Response::builder().status(failure.status);
+            for (name, value) in &failure.headers {
+                builder = builder.header(name, value);
+            }
+            return builder
+                .body(body.into())
+                .map_err(|e| AppError::Anyhow(e.into()));
         }
-        return builder
-            .body(body.into())
-            .map_err(|e| AppError::Anyhow(e.into()));
-    }
+    };
 
-    let service = state.service.lock().await;
     let (file, content_length, stream) = service
-        .stream_from_upstream(
+        .stream_from_upstream_with_metadata(
             &url,
             &cache_name,
             &repo_id,
             source,
+            metadata,
             range.map(|r| r.0),
             range.and_then(|r| r.1),
             user_agent.as_deref(),
         )
         .await?;
-    drop(service);
 
     tracing::info!(
         "{}: cache miss session ready, {}GB, stream in {}ms",
@@ -930,8 +922,7 @@ fn build_stream_response(
 }
 
 async fn stats(State(state): State<AppState>) -> Result<Json<crate::metadata::Stats>, AppError> {
-    let service = state.service.lock().await;
-    let stats = service.stats().await.map_err(AppError::Anyhow)?;
+    let stats = state.service.stats().await.map_err(AppError::Anyhow)?;
     Ok(Json(stats))
 }
 
@@ -1045,8 +1036,7 @@ async fn control_service_stats(
     headers: HeaderMap,
 ) -> Result<Json<ServiceStatsResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let stats = service.stats().await.map_err(AppError::Anyhow)?;
+    let stats = state.service.stats().await.map_err(AppError::Anyhow)?;
     Ok(Json(ServiceStatsResponse {
         repos: stats.repo_count,
         files: stats.file_count,
@@ -1065,9 +1055,8 @@ async fn control_service_gc(
     Json(req): Json<GcRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
     if req.dry_run {
-        let preview = service.gc_dry_run().await.map_err(AppError::Anyhow)?;
+        let preview = state.service.gc_dry_run().await.map_err(AppError::Anyhow)?;
         Ok(Json(
             serde_json::to_value(GcPreviewResponse {
                 candidate_chunks: preview.candidate_chunks,
@@ -1076,7 +1065,8 @@ async fn control_service_gc(
             .map_err(|e| AppError::Anyhow(e.into()))?,
         ))
     } else {
-        let result = service
+        let result = state
+            .service
             .gc_execute_batch(req.batch_size.unwrap_or(32))
             .await
             .map_err(AppError::Anyhow)?;
@@ -1098,8 +1088,8 @@ async fn control_service_reconsile(
     Json(req): Json<ReconsileRequest>,
 ) -> Result<Json<ReconsileResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let result = service
+    let result = state
+        .service
         .reconsile_chunk_refs(req.dry_run)
         .map_err(AppError::Anyhow)?;
     Ok(Json(ReconsileResponse {
@@ -1117,8 +1107,7 @@ async fn control_repos_list(
     Query(query): Query<SourceQuery>,
 ) -> Result<Json<RepoListResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let files = state.service.list().await.map_err(AppError::Anyhow)?;
     let mut grouped: BTreeMap<String, Vec<crate::metadata::File>> = BTreeMap::new();
     for file in files {
         if query.source.as_deref().is_some()
@@ -1131,7 +1120,7 @@ async fn control_repos_list(
     let items: Vec<RepoListItem> = grouped
         .into_iter()
         .map(|(repo, entries)| {
-            let file_items = aggregate_files(&service.metadata, &entries)?;
+            let file_items = aggregate_files(&state.service.metadata, &entries)?;
             let sources = entries
                 .iter()
                 .map(|f| f.source.clone())
@@ -1168,8 +1157,7 @@ async fn control_repo_show(
     Query(query): Query<SourceQuery>,
 ) -> Result<Json<RepoShowResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let files = state.service.list().await.map_err(AppError::Anyhow)?;
     let matched: Vec<_> = files
         .into_iter()
         .filter(|f| f.repo == repo)
@@ -1180,7 +1168,7 @@ async fn control_repo_show(
     if matched.is_empty() {
         return Err(AppError::NotFound(format!("repo not found: {repo}")));
     }
-    let items = aggregate_files(&service.metadata, &matched)?;
+    let items = aggregate_files(&state.service.metadata, &matched)?;
     let sources = matched
         .iter()
         .map(|f| f.source.clone())
@@ -1211,8 +1199,8 @@ async fn control_repo_delete(
     Query(query): Query<SourceQuery>,
 ) -> Result<Json<DeleteResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let result = service
+    let result = state
+        .service
         .delete_repo_all_sources(&repo, query.source.as_deref())
         .await
         .map_err(AppError::Anyhow)?;
@@ -1229,15 +1217,14 @@ async fn control_files_list(
     Query(query): Query<SourceQuery>,
 ) -> Result<Json<FileListResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let files = state.service.list().await.map_err(AppError::Anyhow)?;
     let filtered: Vec<_> = files
         .into_iter()
         .filter(|f| {
             query.source.as_deref().is_none() || query.source.as_deref() == Some(f.source.as_str())
         })
         .collect();
-    let items = aggregate_files(&service.metadata, &filtered)?;
+    let items = aggregate_files(&state.service.metadata, &filtered)?;
     Ok(Json(FileListResponse {
         total: items.len(),
         items,
@@ -1250,8 +1237,7 @@ async fn control_file_show(
     Query(query): Query<FileQuery>,
 ) -> Result<Json<FileShowResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let files = service.list().await.map_err(AppError::Anyhow)?;
+    let files = state.service.list().await.map_err(AppError::Anyhow)?;
     let matched: Vec<_> = files
         .into_iter()
         .filter(|f| f.repo == query.repo && f.name == query.file)
@@ -1269,7 +1255,7 @@ async fn control_file_show(
     let sources = matched.iter().map(|f| f.source.clone()).collect();
     let downloaded_size = matched
         .iter()
-        .map(|file| service.metadata.get_file_downloaded_size(file.id))
+        .map(|file| state.service.metadata.get_file_downloaded_size(file.id))
         .collect::<Result<Vec<_>, _>>()
         .map_err(AppError::Anyhow)?
         .into_iter()
@@ -1293,8 +1279,8 @@ async fn control_file_delete(
     Query(query): Query<FileQuery>,
 ) -> Result<Json<DeleteResponse>, AppError> {
     require_admin(&headers, &state)?;
-    let service = state.service.lock().await;
-    let result = service
+    let result = state
+        .service
         .delete_file_all_sources(&query.repo, &query.file, query.source.as_deref())
         .await
         .map_err(AppError::Anyhow)?;

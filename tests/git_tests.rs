@@ -198,7 +198,7 @@ fn build_git_router(upstream: &str, ms_upstream: Option<&str>, dir: &TempDir) ->
     );
 
     let state = hugrs::server::AppState {
-        service: Arc::new(TokioMutex::new(service)),
+        service: Arc::new(service),
         config: Arc::new(config),
         admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),
@@ -317,7 +317,7 @@ fn build_git_router_with_token(
     );
 
     let state = hugrs::server::AppState {
-        service: Arc::new(TokioMutex::new(service)),
+        service: Arc::new(service),
         config: Arc::new(config),
         admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),
@@ -1187,7 +1187,7 @@ async fn test_git_info_refs_ms_uses_separate_upstream() {
     );
 
     let state = hugrs::server::AppState {
-        service: Arc::new(TokioMutex::new(service)),
+        service: Arc::new(service),
         config: Arc::new(config),
         admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),

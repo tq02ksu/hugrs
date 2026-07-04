@@ -440,7 +440,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
     );
 
     let state = hugrs::server::AppState {
-        service: Arc::new(TokioMutex::new(service)),
+        service: Arc::new(service),
         config: Arc::new(config),
         admin_token: Arc::new("test-admin-token".into()),
         http_client: http_client.clone(),

@@ -430,22 +430,8 @@ impl CacheService {
             None => return Ok(false),
         };
 
-        let chunks = self.metadata.get_file_chunks(file.id)?;
-        let expected = (file.total_size as usize).div_ceil(CHUNK_SIZE);
-        if chunks.len() != expected {
-            return Ok(false);
-        }
-
-        for (i, ft) in chunks.iter().enumerate() {
-            if ft.chunk_index != i as i64 {
-                return Ok(false);
-            }
-            if !self.backend.exists(&ft.sha256).await? {
-                return Ok(false);
-            }
-        }
-
-        Ok(true)
+        let downloaded = self.metadata.get_file_downloaded_size(file.id)?;
+        Ok(downloaded >= file.total_size)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -907,6 +893,31 @@ impl CacheService {
                 anyhow::bail!("upstream returned {}", failure.status)
             }
         };
+        self.stream_from_upstream_with_metadata(
+            url,
+            name,
+            repo,
+            source,
+            metadata,
+            range_start,
+            range_end,
+            user_agent,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn stream_from_upstream_with_metadata(
+        &self,
+        url: &str,
+        name: &str,
+        repo: &str,
+        source: &str,
+        metadata: FetchedMetadata,
+        range_start: Option<u64>,
+        range_end: Option<u64>,
+        user_agent: Option<&str>,
+    ) -> anyhow::Result<(File, u64, ByteStream)> {
         self.reconcile_fetched_metadata(name, repo, source, metadata)?;
 
         let file = self
