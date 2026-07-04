@@ -30,7 +30,12 @@ async fn seed_file(svc: &CacheService, name: &str, repo: &str, source: &str, dat
     let chunks = hugrs::chunker::chunk_with_hashes(data, CHUNK_SIZE);
     for chunk in &chunks {
         svc.backend.put(&chunk.sha256, &chunk.data).await.unwrap();
-        let path = svc.chunk_path(&chunk.sha256);
+        let path = format!(
+            "{}\057{}\057{}",
+            &chunk.sha256[0..2],
+            &chunk.sha256[2..4],
+            chunk.sha256
+        );
         svc.metadata
             .ensure_chunk(
                 &chunk.sha256,
@@ -263,72 +268,6 @@ async fn test_lru_eviction_by_repo() {
     let repos: std::collections::HashSet<&str> = files.iter().map(|f| f.repo.as_str()).collect();
     assert_eq!(repos.len(), 1);
     assert!(repos.contains("repo-b"));
-}
-
-#[tokio::test]
-async fn test_upload_preserves_headers() {
-    let dir = TempDir::new().unwrap();
-    let db_path = dir.path().join("test.db");
-    let metadata = Arc::new(MetadataStore::new(&db_path).unwrap());
-    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
-        dir.path().join("chunks"),
-        Compression::None,
-    ));
-    let service = CacheService::new(
-        metadata.clone(),
-        backend,
-        None,
-        reqwest::Client::new(),
-        reqwest::Client::new(),
-        0,
-        8,
-        true,
-        reqwest::Client::new(),
-        5,
-    );
-
-    service
-        .ensure_file_headers(
-            "f.bin",
-            "test-repo",
-            "hf",
-            795,
-            Some("\"abc123\""),
-            Some("953dc6f6"),
-            None,
-            Some("\"abc123\""),
-            Some("text/plain; charset=utf-8"),
-        )
-        .unwrap();
-
-    let f = metadata.get_file_by_name("f.bin", "hf").unwrap().unwrap();
-    assert_eq!(f.etag.as_deref(), Some("\"abc123\""));
-    assert_eq!(f.x_repo_commit.as_deref(), Some("953dc6f6"));
-    assert_eq!(f.content_type.as_deref(), Some("text/plain; charset=utf-8"));
-
-    seed_file(&service, "f.bin", "test-repo", "hf", &vec![0u8; 795]).await;
-
-    let f = metadata.get_file_by_name("f.bin", "hf").unwrap().unwrap();
-    assert_eq!(
-        f.etag.as_deref(),
-        Some("\"abc123\""),
-        "etag should be preserved after upload"
-    );
-    assert_eq!(
-        f.x_repo_commit.as_deref(),
-        Some("953dc6f6"),
-        "x_repo_commit should be preserved after upload"
-    );
-    assert_eq!(
-        f.x_linked_etag.as_deref(),
-        Some("\"abc123\""),
-        "x_linked_etag should be preserved after upload"
-    );
-    assert_eq!(
-        f.content_type.as_deref(),
-        Some("text/plain; charset=utf-8"),
-        "content_type should be preserved after upload"
-    );
 }
 
 #[tokio::test]

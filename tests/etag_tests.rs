@@ -59,7 +59,12 @@ async fn seed_file(
     let chunks = hugrs::chunker::chunk_with_hashes(data, CHUNK_SIZE);
     for chunk in &chunks {
         svc.backend.put(&chunk.sha256, &chunk.data).await.unwrap();
-        let path = svc.chunk_path(&chunk.sha256);
+        let path = format!(
+            "{}\057{}\057{}",
+            &chunk.sha256[0..2],
+            &chunk.sha256[2..4],
+            chunk.sha256
+        );
         svc.metadata
             .ensure_chunk(
                 &chunk.sha256,

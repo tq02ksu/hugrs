@@ -3,7 +3,7 @@ use crate::metadata::{File, MetadataStore, Stats};
 use crate::storage::StorageBackend;
 use bytes::Bytes;
 use reqwest::StatusCode;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -69,13 +69,6 @@ pub struct GcResult {
     pub reclaimed_bytes: u64,
     pub skipped_chunks: usize,
     pub has_more: bool,
-}
-
-struct DownloadedChunk {
-    index: usize,
-    sha256: String,
-    size: usize,
-    data: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -166,264 +159,6 @@ impl CacheService {
         }
     }
 
-    pub async fn download_from_url(
-        &self,
-        url: &str,
-        name: &str,
-        repo: &str,
-        source: &str,
-        concurrency: usize,
-    ) -> anyhow::Result<()> {
-        if self.is_file_complete(name, source).await? {
-            tracing::info!("{} already cached, skipping", name);
-            self.metadata.touch_repo(repo)?;
-            return Ok(());
-        }
-
-        let head_resp = self.head_client.head(url).send().await?;
-        let first_headers = head_resp.headers();
-        let status = head_resp.status();
-
-        let x_repo_commit = first_headers
-            .get("x-repo-commit")
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-        let x_linked_size: Option<i64> = first_headers
-            .get("x-linked-size")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
-        let x_linked_etag = first_headers
-            .get("x-linked-etag")
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-
-        let (total_size, etag, content_type, downstream_url) = if status.is_redirection() {
-            let location = first_headers
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let location = crate::server::resolve_redirect(url, location);
-            tracing::info!("download_from_url following redirect: {}", location);
-            let resp2 = self.http_client.head(&location).send().await?;
-            let h = resp2.headers();
-            let cl: u64 = h
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {url}"))?;
-            let et = h
-                .get("etag")
-                .and_then(|v| v.to_str().ok())
-                .map(ToString::to_string);
-            let ct = h
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .map(ToString::to_string);
-            (cl, et, ct, location.to_string())
-        } else {
-            let cl: u64 = first_headers
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse().ok())
-                .ok_or_else(|| anyhow::anyhow!("Cannot determine file size for {url}"))?;
-            let et = first_headers
-                .get("etag")
-                .and_then(|v| v.to_str().ok())
-                .map(ToString::to_string);
-            let ct = first_headers
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .map(ToString::to_string);
-            (cl, et, ct, url.to_string())
-        };
-
-        if total_size <= CHUNK_SIZE as u64 {
-            tracing::info!(
-                "Downloading {} ({} bytes, single request)",
-                name,
-                total_size
-            );
-            let data = self
-                .http_client
-                .get(&downstream_url)
-                .send()
-                .await?
-                .bytes()
-                .await?;
-            self.fetched_bytes
-                .fetch_add(data.len() as u64, Ordering::Relaxed);
-            self.metadata.delete_file(name, source)?;
-            let file = self
-                .metadata
-                .add_file(name, repo, total_size as i64, source)?;
-            let chunks = crate::chunker::chunk_with_hashes(&data, CHUNK_SIZE);
-            for chunk in &chunks {
-                if !self.backend.exists(&chunk.sha256).await? {
-                    self.backend.put(&chunk.sha256, &chunk.data).await?;
-                }
-                let path = self.chunk_path(&chunk.sha256);
-                self.metadata.ensure_chunk_and_link(
-                    &chunk.sha256,
-                    "local",
-                    &path,
-                    chunk.chunk_size as i64,
-                    chunk.chunk_size as i64,
-                    file.id,
-                    chunk.chunk_index as i64,
-                    chunk.chunk_size as i64,
-                )?;
-            }
-            self.metadata.set_file_headers(
-                name,
-                source,
-                etag.as_deref(),
-                x_repo_commit.as_deref(),
-                x_linked_size,
-                x_linked_etag.as_deref(),
-                content_type.as_deref(),
-            )?;
-            return Ok(());
-        }
-
-        let chunk_count = (total_size as usize).div_ceil(CHUNK_SIZE);
-
-        let (file_id, completed) = match self.metadata.get_file_by_name(name, source)? {
-            Some(existing) => {
-                if existing.total_size as u64 != total_size {
-                    self.metadata.delete_file(name, source)?;
-                    let file = self
-                        .metadata
-                        .add_file(name, repo, total_size as i64, source)?;
-                    (file.id, HashSet::new())
-                } else {
-                    let file_chunks = self.metadata.get_file_chunks(existing.id)?;
-                    let completed: HashSet<usize> =
-                        file_chunks.iter().map(|t| t.chunk_index as usize).collect();
-                    (existing.id, completed)
-                }
-            }
-            None => {
-                let file = self
-                    .metadata
-                    .add_file(name, repo, total_size as i64, source)?;
-                (file.id, HashSet::new())
-            }
-        };
-
-        let missing: Vec<usize> = (0..chunk_count)
-            .filter(|i| !completed.contains(i))
-            .collect();
-
-        if missing.is_empty() {
-            self.metadata.touch_repo(repo)?;
-            self.metadata.set_file_headers(
-                name,
-                source,
-                etag.as_deref(),
-                x_repo_commit.as_deref(),
-                x_linked_size,
-                x_linked_etag.as_deref(),
-                content_type.as_deref(),
-            )?;
-            return Ok(());
-        }
-
-        tracing::info!(
-            "Downloading {} ({} bytes, {} chunks total, {} remaining, {} concurrent)",
-            name,
-            total_size,
-            chunk_count,
-            missing.len(),
-            concurrency
-        );
-
-        let mut handles = Vec::with_capacity(missing.len());
-        let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
-        for &i in &missing {
-            let start = (i * CHUNK_SIZE) as u64;
-            let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, total_size - 1);
-            let downstream_url = downstream_url.clone();
-            let client = self.http_client.clone();
-            let concurrency_sem = concurrency_sem.clone();
-            let fetched_bytes = self.fetched_bytes.clone();
-
-            handles.push(tokio::spawn(async move {
-                let _permit = concurrency_sem.acquire().await;
-                let range_header = format!("bytes={start}-{end}");
-                let resp = client
-                    .get(&downstream_url)
-                    .header("Range", &range_header)
-                    .send()
-                    .await?;
-
-                let data = resp.bytes().await?;
-                fetched_bytes.fetch_add(data.len() as u64, Ordering::Relaxed);
-                let sha256 = chunker::sha256_hex(&data);
-
-                anyhow::Ok(DownloadedChunk {
-                    index: i,
-                    sha256,
-                    size: data.len(),
-                    data: data.to_vec(),
-                })
-            }));
-        }
-
-        use futures_util::StreamExt;
-        let mut futs = futures_util::stream::FuturesUnordered::from_iter(handles);
-        let mut completed_count = 0;
-        let total = missing.len();
-        while let Some(result) = futs.next().await {
-            let chunk = result??;
-
-            let stored_size: i64 = if !self.backend.exists(&chunk.sha256).await? {
-                self.backend.put(&chunk.sha256, &chunk.data).await? as i64
-            } else {
-                chunk.size as i64
-            };
-
-            let path = self.chunk_path(&chunk.sha256);
-            self.metadata.ensure_chunk_and_link(
-                &chunk.sha256,
-                "local",
-                &path,
-                chunk.size as i64,
-                stored_size,
-                file_id,
-                chunk.index as i64,
-                chunk.size as i64,
-            )?;
-
-            completed_count += 1;
-            tracing::info!(
-                "{} chunk {}/{} done ({}/{} total)",
-                name,
-                chunk.index + 1,
-                chunk_count,
-                completed_count,
-                total
-            );
-        }
-
-        self.metadata.touch_repo(repo)?;
-
-        self.metadata.set_file_headers(
-            name,
-            source,
-            etag.as_deref(),
-            x_repo_commit.as_deref(),
-            x_linked_size,
-            x_linked_etag.as_deref(),
-            content_type.as_deref(),
-        )?;
-
-        if let Some(limit) = self.max_size {
-            self.evict_if_needed(limit).await?;
-        }
-
-        Ok(())
-    }
-
     pub async fn is_file_complete(&self, name: &str, source: &str) -> anyhow::Result<bool> {
         Ok(self.get_complete_file(name, source).await?.is_some())
     }
@@ -443,36 +178,6 @@ impl CacheService {
         } else {
             Ok(None)
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn ensure_file_headers(
-        &self,
-        name: &str,
-        repo: &str,
-        source: &str,
-        total_size: u64,
-        etag: Option<&str>,
-        x_repo_commit: Option<&str>,
-        x_linked_size: Option<i64>,
-        x_linked_etag: Option<&str>,
-        content_type: Option<&str>,
-    ) -> anyhow::Result<()> {
-        if self.metadata.get_file_by_name(name, source)?.is_none() {
-            self.metadata.delete_file(name, source)?;
-            self.metadata
-                .add_file(name, repo, total_size as i64, source)?;
-        }
-        self.metadata.set_file_headers(
-            name,
-            source,
-            etag,
-            x_repo_commit,
-            x_linked_size,
-            x_linked_etag,
-            content_type,
-        )?;
-        Ok(())
     }
 
     pub async fn info(&self, name: &str, source: &str) -> anyhow::Result<Option<File>> {
@@ -645,10 +350,6 @@ impl CacheService {
             let _ = self.gc_execute().await?;
         }
         Ok(())
-    }
-
-    pub fn chunk_path(&self, sha256: &str) -> String {
-        format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256)
     }
 
     pub async fn backend_exists(&self, key: &str) -> anyhow::Result<bool> {
