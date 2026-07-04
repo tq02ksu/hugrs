@@ -12,6 +12,7 @@
 - Per-sha256 write serialization prevents TOCTOU on chunk storage
 - Chunk replacement in metadata correctly updates sha256 and ref_count on re-fetch
 - Download concurrency semaphore scoped correctly across all chunk downloads
+- Stale cached_chunks entry cleared after corruption detection to prevent fetch re-validation against wrong sha256 (files stuck at 99%)
 
 ### CI
 - GitHub Release body is now extracted from the matching changelog section during publishing
