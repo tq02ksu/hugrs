@@ -187,6 +187,23 @@ Expected user-visible behavior:
 - `Content-Range` should be correct
 - `Accept-Ranges: bytes` should be present
 
+### Upstream full-file response on Range requests
+
+Some HuggingFace mirrors and CDN endpoints may ignore the `Range` header
+and return `200 OK` with the entire file body.  When this happens:
+
+- the response status is `200` instead of `206`
+- the response body contains the full file, not just the requested range
+
+HugRS internal behavior when this occurs:
+
+- detect the mismatch (status `200` + body larger than the requested range)
+- extract only the requested byte range from the full body
+- store the extracted chunk normally
+
+This does not change client-visible behavior. Clients still receive the
+correct partial data through the normal chunk-serving path.
+
 ## Error Handling
 
 HugRS client-visible rule:

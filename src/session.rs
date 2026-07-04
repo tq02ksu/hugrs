@@ -301,10 +301,12 @@ impl ChunkReader {
         if let Some(ref ua) = user_agent {
             req = req.header("User-Agent", ua);
         }
-        let data = req
+        let response = req
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?
+            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?;
+        let status = response.status();
+        let full_data = response
             .error_for_status()
             .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?
             .bytes()
@@ -312,13 +314,20 @@ impl ChunkReader {
             .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} download error: {e}"))?;
 
         let expected_len = (end - start + 1) as usize;
-        if data.len() != expected_len {
+        let data = if status == reqwest::StatusCode::OK && full_data.len() > expected_len {
+            let offset = start as usize;
+            let slice_end = (end + 1) as usize;
+            let slice_end = slice_end.min(full_data.len());
+            full_data.slice(offset..slice_end)
+        } else if full_data.len() != expected_len {
             anyhow::bail!(
                 "chunk {chunk_idx} download incomplete: expected {} bytes, got {}",
                 expected_len,
-                data.len()
+                full_data.len()
             );
-        }
+        } else {
+            full_data
+        };
 
         self.fetched_bytes
             .fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -1105,6 +1114,85 @@ mod tests {
                     "chunk download should succeed after clearing stale cached_chunks, but got error: {}",
                     e
                 );
+            }
+            Err(e) => {
+                panic!("receiver closed unexpectedly: {e}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_chunk_truncates_full_file_on_200() {
+        let _dir = TempDir::new().unwrap();
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ));
+
+        let two_chunks: Vec<u8> = (0..2 * super::CHUNK_SIZE)
+            .map(|i| (i as u8).wrapping_mul(13).wrapping_add(47))
+            .collect();
+        let state = SubscribeTestState {
+            chunk_data: Arc::new(two_chunks.clone()),
+        };
+
+        let app = Router::new()
+            .route("/test.bin", get(serve_full_file))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let url = format!("http://{addr}/test.bin");
+        let cached_chunks = Arc::new(StdMutex::new(HashMap::new()));
+        let total_size = (2 * super::CHUNK_SIZE) as u64;
+
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        let session_table = Arc::new(super::SessionTable::new(
+            reqwest::Client::new(),
+            backend,
+            event_tx,
+            Arc::new(AtomicU64::new(0)),
+            true,
+        ));
+
+        let mut rx = session_table
+            .subscribe(
+                1,
+                1,
+                &url,
+                super::CHUNK_SIZE as u64,
+                (2 * super::CHUNK_SIZE - 1) as u64,
+                total_size,
+                2,
+                None,
+                &cached_chunks,
+            )
+            .await
+            .unwrap();
+
+        match rx.recv().await {
+            Ok(Ok(data)) => {
+                assert_eq!(
+                    data.len(),
+                    super::CHUNK_SIZE,
+                    "should return exactly one chunk, not the full {} bytes",
+                    two_chunks.len()
+                );
+                let expected: Vec<u8> =
+                    two_chunks[super::CHUNK_SIZE..2 * super::CHUNK_SIZE].to_vec();
+                assert_eq!(
+                    data.as_ref(),
+                    expected.as_slice(),
+                    "sliced data must match the second chunk of the full file"
+                );
+            }
+            Ok(Err(e)) => {
+                panic!("chunk download should succeed, but got error: {}", e);
             }
             Err(e) => {
                 panic!("receiver closed unexpectedly: {e}");
