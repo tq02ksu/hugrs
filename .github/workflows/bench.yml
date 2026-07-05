@@ -1,0 +1,65 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Restore baseline (PR)
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: target/criterion/master
+          key: criterion-baseline-master-${{ runner.os }}
+          restore-keys: |
+            criterion-baseline-master-${{ runner.os }}
+
+      - name: Build benchmarks
+        run: cargo bench --bench retry --no-run
+
+      - name: Run benchmarks (PR — compare against baseline)
+        if: github.event_name == 'pull_request'
+        run: >
+          cargo bench --bench retry --
+          sha256
+          storage_write
+          storage_concurrent_read
+          storage_concurrent_write
+          --baseline master
+          --verbose
+          || echo "::warning::Benchmark regression detected — review above"
+
+      - name: Run benchmarks and save baseline (master)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: >
+          cargo bench --bench retry --
+          sha256
+          storage_write
+          storage_concurrent_read
+          storage_concurrent_write
+          --save-baseline master
+          --verbose
+
+      - name: Save baseline cache (master)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/save@v4
+        with:
+          path: target/criterion/master
+          key: criterion-baseline-master-${{ runner.os }}
