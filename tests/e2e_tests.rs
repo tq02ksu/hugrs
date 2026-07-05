@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -169,10 +170,7 @@ async fn mock_get(
     Ok(Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
         .header("Content-Length", slice.len())
-        .header(
-            "Content-Range",
-            format!("bytes {}-{}/{}", start, end, total),
-        )
+        .header("Content-Range", format!("bytes {start}-{end}/{total}"))
         .body(axum::body::Body::from(slice.to_vec()))
         .unwrap())
 }
@@ -242,10 +240,7 @@ async fn mock_ms_cdn_get(
         .header("Content-Type", "application/octet-stream");
 
     if status == StatusCode::PARTIAL_CONTENT {
-        builder = builder.header(
-            "Content-Range",
-            format!("bytes {}-{}/{}", start, end, total),
-        );
+        builder = builder.header("Content-Range", format!("bytes {start}-{end}/{total}"));
     }
 
     Ok(builder
@@ -477,7 +472,7 @@ async fn test_small_file_bytes_match_upstream() {
     let (upstream, _s) = start_upstream(test_data.clone()).await;
     let dir = TempDir::new().unwrap();
     let service = make_service(&dir, "small.db");
-    let url = format!("{}/org/repo/resolve/main/cfg.json", upstream);
+    let url = format!("{upstream}/org/repo/resolve/main/cfg.json");
     let (_, _, stream) = service
         .stream_from_upstream(&url, "cfg.json", "org/repo", "hf", None, None, None)
         .await
@@ -527,12 +522,12 @@ async fn test_small_file_http_layer_matches() {
 #[tokio::test]
 async fn test_large_file_bytes_match_upstream() {
     let test_data: Vec<u8> = (0..(CHUNK_SIZE as u64 * 2 + 500) as u8)
-        .map(|i| (i.wrapping_mul(17).wrapping_add(31)) as u8)
+        .map(|i| i.wrapping_mul(17).wrapping_add(31))
         .collect();
     let (upstream, s) = start_upstream(test_data.clone()).await;
     let dir = TempDir::new().unwrap();
     let service = make_service(&dir, "large.db");
-    let url = format!("{}/org/repo/resolve/main/big.bin", upstream);
+    let url = format!("{upstream}/org/repo/resolve/main/big.bin");
     let (_, _, stream) = service
         .stream_from_upstream(&url, "big.bin", "org/repo", "hf", None, None, None)
         .await
@@ -629,12 +624,12 @@ async fn test_file_proxy_does_not_invent_user_agent() {
 #[tokio::test]
 async fn test_second_get_uses_cache_and_matches() {
     let test_data: Vec<u8> = (0..(CHUNK_SIZE as u64 * 2 + 500) as u8)
-        .map(|i| (i.wrapping_mul(17).wrapping_add(31)) as u8)
+        .map(|i| i.wrapping_mul(17).wrapping_add(31))
         .collect();
     let (upstream, s) = start_upstream(test_data.clone()).await;
     let dir = TempDir::new().unwrap();
     let service = make_service(&dir, "cache_hit.db");
-    let url = format!("{}/org/repo/resolve/main/big.bin", upstream);
+    let url = format!("{upstream}/org/repo/resolve/main/big.bin");
     let n = "big.bin";
     let (_, _, s1) = service
         .stream_from_upstream(&url, n, "org/repo", "hf", None, None, None)
@@ -1196,22 +1191,8 @@ async fn test_control_api_file_delete_without_source_applies_to_all_sources() {
     let dir = TempDir::new().unwrap();
 
     let seed_service = make_service(&dir, "http_db");
-    seed_file(
-        &seed_service,
-        "shared.bin",
-        "repo-a",
-        "hf",
-        &vec![1, 2, 3, 4],
-    )
-    .await;
-    seed_file(
-        &seed_service,
-        "shared.bin",
-        "repo-a",
-        "ms",
-        &vec![1, 2, 3, 4],
-    )
-    .await;
+    seed_file(&seed_service, "shared.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
+    seed_file(&seed_service, "shared.bin", "repo-a", "ms", &[1, 2, 3, 4]).await;
 
     let app = build_hugrs_router(&upstream, &dir);
 

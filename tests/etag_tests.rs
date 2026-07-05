@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use axum::{
     extract::State,
     http::StatusCode,
@@ -138,7 +139,7 @@ async fn test_reconcile_same_etag_updates_commit() {
 
     let tmp = TempDir::new().unwrap();
     let svc = make_svc(&tmp);
-    let url = format!("http://{}/resolve/main/t.bin", addr);
+    let url = format!("http://{addr}/resolve/main/t.bin");
     seed_file(&svc, "t.bin", "test-repo", "hf", &data, "\"same-etag\"").await;
     svc.metadata
         .set_file_headers(
@@ -187,7 +188,7 @@ async fn test_reconcile_changed_etag_rebuilds_metadata() {
 
     let tmp = TempDir::new().unwrap();
     let svc = make_svc(&tmp);
-    let url = format!("http://{}/resolve/main/t.bin", addr);
+    let url = format!("http://{addr}/resolve/main/t.bin");
     seed_file(&svc, "t.bin", "test-repo", "hf", &data, "\"old-etag\"").await;
 
     svc.reconcile_file_metadata(&url, "t.bin", "test-repo", "hf", None)
@@ -212,7 +213,7 @@ async fn test_reconcile_unreachable() {
         "t.bin",
         "test-repo",
         "hf",
-        &vec![0u8; 100],
+        &[0u8; 100],
         "\"any-etag\"",
     )
     .await;
@@ -252,7 +253,7 @@ async fn test_reconcile_missing_cached_etag_rebuilds() {
     let svc = make_svc(&tmp);
     svc.metadata.add_file("nob.bin", "repo", 100, "hf").unwrap();
 
-    let url = format!("http://{}/resolve/main/nob.bin", addr);
+    let url = format!("http://{addr}/resolve/main/nob.bin");
     svc.reconcile_file_metadata(&url, "nob.bin", "repo", "hf", None)
         .await
         .unwrap();

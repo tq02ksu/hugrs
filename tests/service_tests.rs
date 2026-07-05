@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use hugrs::metadata::File;
 use hugrs::metadata::MetadataStore;
 use hugrs::service::CacheService;
@@ -199,8 +200,8 @@ async fn test_overwriting_seeded_file_updates_chunk_mapping() {
         5,
     );
 
-    seed_file(&service, "dup.bin", "repo-a", "hf", &vec![1, 2, 3]).await;
-    seed_file(&service, "dup.bin", "repo-a", "hf", &vec![4, 5, 6]).await;
+    seed_file(&service, "dup.bin", "repo-a", "hf", &[1, 2, 3]).await;
+    seed_file(&service, "dup.bin", "repo-a", "hf", &[4, 5, 6]).await;
 
     let file = service.info("dup.bin", "hf").await.unwrap().unwrap();
     let downloaded = read_seeded_file(&service, &file).await;
@@ -230,7 +231,7 @@ async fn test_lru_eviction() {
     );
 
     seed_file(&service, "big.bin", "repo-big", "hf", &vec![0u8; 250]).await;
-    seed_file(&service, "small.bin", "repo-small", "hf", &vec![1u8; 100]).await;
+    seed_file(&service, "small.bin", "repo-small", "hf", &[1u8; 100]).await;
 
     let files = service.list().await.unwrap();
     let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
@@ -260,9 +261,9 @@ async fn test_lru_eviction_by_repo() {
         5,
     );
 
-    seed_file(&service, "a.txt", "repo-a", "hf", &vec![1u8; 100]).await;
-    seed_file(&service, "b.txt", "repo-a", "hf", &vec![2u8; 100]).await;
-    seed_file(&service, "c.txt", "repo-b", "hf", &vec![3u8; 100]).await;
+    seed_file(&service, "a.txt", "repo-a", "hf", &[1u8; 100]).await;
+    seed_file(&service, "b.txt", "repo-a", "hf", &[2u8; 100]).await;
+    seed_file(&service, "c.txt", "repo-b", "hf", &[3u8; 100]).await;
 
     let files = service.list().await.unwrap();
     let repos: std::collections::HashSet<&str> = files.iter().map(|f| f.repo.as_str()).collect();
@@ -292,7 +293,7 @@ async fn test_delete_marks_zero_ref_chunks_orphaned() {
         5,
     );
 
-    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
 
     let deleted = service
         .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
@@ -328,7 +329,7 @@ async fn test_delete_does_not_remove_backend_data_immediately() {
         5,
     );
 
-    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
 
     let file = metadata.get_file_by_name("x.bin", "hf").unwrap().unwrap();
     let sha = metadata.get_file_chunks(file.id).unwrap()[0].sha256.clone();
@@ -363,8 +364,8 @@ async fn test_delete_without_source_removes_all_sources() {
         5,
     );
 
-    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
-    seed_file(&service, "x.bin", "repo-a", "ms", &vec![1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "ms", &[1, 2, 3, 4]).await;
 
     let deleted = service
         .delete_file_all_sources("repo-a", "x.bin", None)
@@ -398,7 +399,7 @@ async fn test_gc_dry_run_reports_orphan_candidates() {
         5,
     );
 
-    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
     service
         .delete_file_all_sources("repo-a", "x.bin", Some("hf"))
         .await
@@ -431,7 +432,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         5,
     );
 
-    seed_file(&service, "x.bin", "repo-a", "hf", &vec![1, 2, 3, 4]).await;
+    seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
 
     let file = metadata.get_file_by_name("x.bin", "hf").unwrap().unwrap();
     let sha = metadata.get_file_chunks(file.id).unwrap()[0].sha256.clone();

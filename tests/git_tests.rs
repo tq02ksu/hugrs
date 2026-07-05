@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use axum::{
     extract::{OriginalUri, State},
     http::{HeaderMap, Method, StatusCode},
@@ -80,10 +81,7 @@ async fn mock_git_catch_all(
             .body(axum::body::Body::from(s.lfs_response.as_ref().clone()))
             .unwrap())
     } else {
-        Err((
-            StatusCode::NOT_FOUND,
-            format!("not found: {} {}", method, path),
-        ))
+        Err((StatusCode::NOT_FOUND, format!("not found: {method} {path}")))
     }
 }
 

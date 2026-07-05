@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -65,10 +66,7 @@ async fn mock_get(
     Ok(Response::builder()
         .status(StatusCode::PARTIAL_CONTENT)
         .header("Content-Length", data.len())
-        .header(
-            "Content-Range",
-            format!("bytes {}-{}/{}", start, end, total),
-        )
+        .header("Content-Range", format!("bytes {start}-{end}/{total}"))
         .body(axum::body::Body::from(data.to_vec()))
         .unwrap())
 }
@@ -127,7 +125,7 @@ async fn test_multiple_gets_no_duplicate_downloads() {
         5,
     ));
 
-    let upstream_url = format!("http://{}/test/repo/resolve/main/no-dup.bin", addr);
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/no-dup.bin");
 
     let (f1, l1, s1) = service
         .stream_from_upstream(
@@ -235,7 +233,7 @@ async fn test_partial_cache_no_redundant_download() {
         5,
     ));
 
-    let upstream_url = format!("http://{}/test/repo/resolve/main/partial.bin", addr);
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/partial.bin");
 
     use futures_util::StreamExt;
 
@@ -341,7 +339,7 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
         5,
     ));
 
-    let upstream_url = format!("http://{}/test/repo/resolve/main/retry.bin", addr);
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/retry.bin");
 
     use futures_util::StreamExt;
 
@@ -451,10 +449,7 @@ async fn repair_get(
     Ok(Response::builder()
         .status(status)
         .header("Content-Length", data.len())
-        .header(
-            "Content-Range",
-            format!("bytes {}-{}/{}", start, end, total),
-        )
+        .header("Content-Range", format!("bytes {start}-{end}/{total}"))
         .body(axum::body::Body::from(data.to_vec()))
         .unwrap())
 }
@@ -512,7 +507,7 @@ async fn test_corrupt_cached_large_chunk_refetches_from_upstream() {
         5,
     ));
 
-    let upstream_url = format!("http://{}/test/repo/resolve/main/repair-large.bin", addr);
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/repair-large.bin");
 
     let (_, _, first_stream) = service
         .stream_from_upstream(
@@ -655,7 +650,7 @@ async fn test_corrupt_cached_small_file_refetches_from_upstream() {
         5,
     ));
 
-    let upstream_url = format!("http://{}/test/repo/resolve/main/repair-small.bin", addr);
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/repair-small.bin");
 
     let (_, _, first_stream) = service
         .stream_from_upstream(
@@ -789,7 +784,7 @@ async fn test_corrupt_cached_chunk_returns_error_when_upstream_unavailable() {
         5,
     ));
 
-    let upstream_url = format!("http://{}/test/repo/resolve/main/repair-fail.bin", addr);
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/repair-fail.bin");
 
     let (_, _, first_stream) = service
         .stream_from_upstream(

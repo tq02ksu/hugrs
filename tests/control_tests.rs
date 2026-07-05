@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use clap::Parser;
 use hugrs::hugrsctl_cli::{Cli, FilesCommand, ReposCommand, Resource, ServiceCommand};
 

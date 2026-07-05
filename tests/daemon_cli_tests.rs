@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use clap::Parser;
 use hugrs::daemon_cli::DaemonCli;
 

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use hugrs::chunker;
 
 const CHUNK_SIZE: usize = 4 * 1024 * 1024;

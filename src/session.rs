@@ -790,6 +790,7 @@ impl FileSessionManager {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::{prefetch_budget, FileSessionActor, SessionTable, CHUNK_SIZE};
     use crate::storage::StorageBackend;
     use std::collections::{HashMap, HashSet};

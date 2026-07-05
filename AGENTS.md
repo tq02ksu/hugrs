@@ -94,10 +94,11 @@ cargo build --release
 - Before creating any commit, run the relevant verification commands for the change and confirm they pass.
 - For Rust code changes, the default pre-commit quality gates are:
   - `cargo fmt`
-  - `cargo clippy --all-features`
+  - `cargo clippy --all-features --tests`
   - `cargo test`
 - During iteration, targeted tests are acceptable for faster feedback, but do not commit until the full required checks for the touched area have passed.
-- Do not commit code that is known to fail formatting, clippy, or tests.
+- Do not commit code that is known to fail formatting, clippy (including test code), or tests.
+- **Test lint policy**: `unwrap_used` and `expect_used` are denied for production code (`lib`, `bin`) but allowed in test targets via `#![allow(clippy::unwrap_used, clippy::expect_used)]` at the top of each test file. This follows the community convention that `.unwrap()` in tests is idiomatic — tests should panic on unexpected failures. Other clippy lints (e.g. `uninlined_format_args`, `useless_vec`) apply to tests as well and should be fixed, not suppressed.
 - **Commit discipline**: keep different types of changes in separate commits. Bug fixes, new features, and release version bumps (Cargo.toml, CHANGELOG, README tags) must be in distinct commits with appropriate prefixes (`fix:`, `feat:`, `release:`). Do not mix bugfix code with version bump metadata in the same commit.
 
 ## Release Checklist

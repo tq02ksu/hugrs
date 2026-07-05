@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use hugrs::storage::local::LocalBackend;
 use hugrs::storage::Compression;
 use hugrs::storage::StorageBackend;

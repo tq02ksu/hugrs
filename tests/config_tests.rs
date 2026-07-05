@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::result_large_err)]
 use hugrs::config::{CliOverrides, Config};
 
 #[test]
