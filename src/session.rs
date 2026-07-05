@@ -5,16 +5,17 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 pub const CHUNK_SIZE: usize = crate::service::CHUNK_SIZE;
 
+type ClientRange = (u64, u64);
+type ClientSender = mpsc::Sender<Result<Bytes, anyhow::Error>>;
+type Subscribers = StdMutex<Vec<(ClientRange, ClientSender)>>;
 type ChunkMessage = Result<Arc<Bytes>, Arc<String>>;
-
-type SubscriberEntry = (u64, u64, mpsc::Sender<Result<Bytes, anyhow::Error>>);
 
 trait LockExt<T> {
     fn lock_or_recover(&self) -> MutexGuard<'_, T>;
@@ -38,6 +39,48 @@ fn prefetch_budget(base: usize, active_cursors: usize) -> usize {
         2 => (base / 2).max(1),
         _ => (base / 4).max(1),
     }
+}
+
+fn compute_active_cursors(
+    client_ranges: &[ClientRange],
+    completed: &HashSet<usize>,
+    chunk_sz: u64,
+    chunk_count: usize,
+) -> Vec<usize> {
+    let mut cursors = Vec::new();
+    let max_idx = chunk_count.saturating_sub(1);
+
+    for (start, end) in client_ranges {
+        let first = (*start / chunk_sz) as usize;
+        let last = ((*end / chunk_sz) as usize).min(max_idx);
+        if let Some(next) = (first..=last).find(|idx| !completed.contains(idx)) {
+            cursors.push(next);
+        }
+    }
+
+    cursors.sort_unstable();
+    cursors.dedup();
+    cursors
+}
+
+fn select_next_chunk(
+    client_ranges: &[ClientRange],
+    completed: &HashSet<usize>,
+    chunk_sz: u64,
+    chunk_count: usize,
+) -> Option<usize> {
+    compute_active_cursors(client_ranges, completed, chunk_sz, chunk_count)
+        .into_iter()
+        .next()
+}
+
+fn retain_active_prefetches(
+    inflight_prefetches: &mut HashSet<usize>,
+    completed: &HashSet<usize>,
+    cached: &HashSet<usize>,
+) -> usize {
+    inflight_prefetches.retain(|idx| !completed.contains(idx) && !cached.contains(idx));
+    inflight_prefetches.len()
 }
 
 pub struct ChunkStoredEvent {
@@ -351,45 +394,80 @@ impl ChunkReader {
     }
 }
 
-// ── Actor Messages ────────────────────────────────────────────
+// ── FileDownloadSession ───────────────────────────────────────
 
-/// Messages for the actor-based file session.
-pub enum SessionMessage {
-    Subscribe {
-        reply: mpsc::Sender<Result<Bytes, anyhow::Error>>,
-        file: Box<File>,
-        range: (u64, u64),
-    },
-    ChunkReady {
-        idx: usize,
-        data: Arc<Bytes>,
-        sha256: String,
-        elapsed_ms: u64,
-    },
-    ChunkFailed {
-        idx: usize,
-        error: Arc<String>,
-    },
-    /// A metadata write for a chunk has been persisted to the database.
-    MetadataWritten {
-        idx: usize,
-    },
-    TickBackpressure,
+pub struct FileDownloadSessionConfig {
+    pub file_id: i64,
+    pub name: String,
+    pub url: String,
+    pub total_size: u64,
+    pub chunk_count: usize,
+    pub user_agent: Option<String>,
+    pub prefetch_budget_base: usize,
+    pub cached_chunks: StdMutex<HashMap<usize, String>>,
+    pub file: File,
 }
 
-// ── ActorHandle ───────────────────────────────────────────────
-
-/// Handle to communicate with a FileSessionActor.
-#[derive(Clone)]
-pub struct ActorHandle {
-    pub(crate) mailbox: mpsc::UnboundedSender<SessionMessage>,
-    pub(crate) file: File,
-    pub(crate) total_size: u64,
+pub struct FileDownloadSessionDeps {
+    pub session_table: Arc<SessionTable>,
+    pub served_bytes: Arc<AtomicU64>,
 }
 
-impl ActorHandle {
+pub struct FileDownloadSession {
+    file_id: i64,
+    name: String,
+    url: String,
+    total_size: u64,
+    chunk_count: usize,
+    user_agent: Option<String>,
+
+    subscriber_count: AtomicUsize,
+    subscribers: Subscribers,
+    inflight_prefetches: StdMutex<HashSet<usize>>,
+
+    session_table: Arc<SessionTable>,
+    served_bytes: Arc<AtomicU64>,
+    prefetch_budget_base: usize,
+    cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
+    file: File,
+
+    task: StdMutex<Option<JoinHandle<()>>>,
+    state: AtomicU8,
+    file_ready: AtomicBool,
+    file_data: StdMutex<Option<(File, u64)>>,
+}
+
+impl FileDownloadSession {
+    fn new(cfg: FileDownloadSessionConfig, deps: FileDownloadSessionDeps) -> Self {
+        Self {
+            file_id: cfg.file_id,
+            name: cfg.name,
+            url: cfg.url,
+            total_size: cfg.total_size,
+            chunk_count: cfg.chunk_count.max(1),
+            user_agent: cfg.user_agent,
+            subscriber_count: AtomicUsize::new(0),
+            subscribers: StdMutex::new(Vec::new()),
+            inflight_prefetches: StdMutex::new(HashSet::new()),
+            session_table: deps.session_table,
+            served_bytes: deps.served_bytes,
+            prefetch_budget_base: cfg.prefetch_budget_base,
+            cached_chunks: Arc::new(cfg.cached_chunks),
+            file: cfg.file,
+            task: StdMutex::new(None),
+            state: AtomicU8::new(0),
+            file_ready: AtomicBool::new(false),
+            file_data: StdMutex::new(None),
+        }
+    }
+
+    fn signal_file_ready(&self, file: File, total_size: u64) {
+        self.file_data.lock_or_recover().replace((file, total_size));
+        self.file_ready.store(true, Ordering::SeqCst);
+    }
+
     pub async fn subscribe(
-        &self,
+        self: &Arc<Self>,
         range: Option<(u64, Option<u64>)>,
     ) -> anyhow::Result<(File, u64, crate::service::ByteStream)> {
         let total_size = self.total_size;
@@ -406,17 +484,15 @@ impl ActorHandle {
 
         let (tx, rx) = mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 
-        if self
-            .mailbox
-            .send(SessionMessage::Subscribe {
-                reply: tx,
-                file: Box::new(self.file.clone()),
-                range: (req_start, req_end),
-            })
-            .is_err()
         {
-            anyhow::bail!("session actor has stopped");
+            let mut subs = self.subscribers.lock_or_recover();
+            subs.push(((req_start, req_end), tx));
         }
+        self.subscriber_count.fetch_add(1, Ordering::Relaxed);
+
+        self.signal_file_ready(self.file.clone(), total_size);
+
+        self.ensure_running();
 
         Ok((
             self.file.clone(),
@@ -424,473 +500,222 @@ impl ActorHandle {
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))
     }
-}
 
-// ── FileSessionActor ──────────────────────────────────────────
-
-struct FileSessionActor {
-    // Mailbox
-    mailbox_rx: mpsc::UnboundedReceiver<SessionMessage>,
-    mailbox_tx: mpsc::UnboundedSender<SessionMessage>,
-    // Fixed config
-    file_id: i64,
-    name: String,
-    url: String,
-    total_size: u64,
-    chunk_count: usize,
-    user_agent: Option<String>,
-    prefetch_budget_base: usize,
-    session_table: Arc<SessionTable>,
-    served_bytes: Arc<AtomicU64>,
-    // Mutable state (owned by actor — no locks)
-    subscribers: Vec<SubscriberEntry>,
-    completed: HashSet<usize>,
-    inflight: HashSet<usize>,
-    cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
-    avg_latency_ms: f64,
-    backpressure_ratio: f64,
-    /// Number of chunk metadata writes not yet confirmed by the database.
-    pending_metadata: usize,
-}
-
-impl FileSessionActor {
-    #[allow(clippy::too_many_arguments)]
-    fn spawn(
-        file_id: i64,
-        name: String,
-        url: String,
-        total_size: u64,
-        chunk_count: usize,
-        user_agent: Option<String>,
-        prefetch_budget_base: usize,
-        session_table: Arc<SessionTable>,
-        served_bytes: Arc<AtomicU64>,
-        cached_chunks: HashMap<usize, String>,
-        file: File,
-    ) -> (ActorHandle, JoinHandle<()>) {
-        let (mailbox_tx, mailbox_rx) = mpsc::unbounded_channel::<SessionMessage>();
-
-        let mailbox_tx_clone = mailbox_tx.clone();
-
-        let handle = ActorHandle {
-            mailbox: mailbox_tx,
-            file,
-            total_size,
-        };
-
-        let actor = FileSessionActor {
-            mailbox_rx,
-            mailbox_tx: mailbox_tx_clone,
-            file_id,
-            name,
-            url,
-            total_size,
-            chunk_count: chunk_count.max(1),
-            user_agent,
-            prefetch_budget_base,
-            session_table,
-            served_bytes,
-            subscribers: Vec::new(),
-            completed: HashSet::new(),
-            inflight: HashSet::new(),
-            cached_chunks: Arc::new(StdMutex::new(cached_chunks)),
-            avg_latency_ms: 1000.0, // initial estimate
-            backpressure_ratio: 0.0,
-            pending_metadata: 0,
-        };
-
-        let join_handle = tokio::spawn(actor.run());
-
-        (handle, join_handle)
-    }
-
-    async fn run(mut self) {
-        tracing::info!(
-            "[f{}] {}: actor started, {} chunks total",
-            self.file_id,
-            self.name,
-            self.chunk_count,
-        );
-
-        let session_start = std::time::Instant::now();
-
-        while let Some(msg) = self.mailbox_rx.recv().await {
-            match msg {
-                SessionMessage::Subscribe { reply, file, range } => {
-                    self.on_subscribe(reply, *file, range).await;
-                }
-                SessionMessage::ChunkReady {
-                    idx,
-                    data,
-                    sha256,
-                    elapsed_ms,
-                } => {
-                    self.on_chunk_ready(idx, data, sha256, elapsed_ms).await;
-                }
-                SessionMessage::ChunkFailed { idx, error } => {
-                    self.on_chunk_failed(idx, error).await;
-                    break;
-                }
-                SessionMessage::MetadataWritten { idx: _idx } => {
-                    self.pending_metadata -= 1;
-                }
-                SessionMessage::TickBackpressure => {
-                    self.on_tick_backpressure();
-                }
-            }
-
-            self.clean_subscribers();
-            if self.subscribers.is_empty() && self.inflight.is_empty() && self.pending_metadata == 0
-            {
-                break;
-            }
-        }
-
-        // Drop remaining subscriber channels cleanly — receiver sees EOF
-        self.subscribers.clear();
-
-        tracing::info!(
-            "[f{}] {}: actor finished in {}ms",
-            self.file_id,
-            self.name,
-            session_start.elapsed().as_millis(),
-        );
-    }
-
-    async fn on_subscribe(
-        &mut self,
-        reply: mpsc::Sender<Result<Bytes, anyhow::Error>>,
-        _file: File,
-        range: (u64, u64),
-    ) {
-        self.subscribers.push((range.0, range.1, reply));
-        self.schedule_next_and_prefetch();
-    }
-
-    async fn on_chunk_ready(
-        &mut self,
-        idx: usize,
-        data: Arc<Bytes>,
-        sha256: String,
-        elapsed_ms: u64,
-    ) {
-        // Update moving average latency
-        self.avg_latency_ms = self.avg_latency_ms * 0.7 + elapsed_ms as f64 * 0.3;
-
-        self.completed.insert(idx);
-        self.inflight.remove(&idx);
-
-        // Record the sha256 in cached_chunks
-        self.cached_chunks.lock_or_recover().insert(idx, sha256);
-
-        // Forward to all relevant subscribers
-        let chunk_start = idx as u64 * CHUNK_SIZE as u64;
-        self.forward_chunk(chunk_start, &data).await;
-
-        self.served_bytes
-            .fetch_add(data.len() as u64, Ordering::Relaxed);
-
-        if elapsed_ms > 5_000 {
-            tracing::warn!(
-                "[f{}] {} chunk {}/{}: SLOW — {} bytes in {}ms",
-                self.file_id,
-                self.name,
-                idx + 1,
-                self.chunk_count,
-                data.len(),
-                elapsed_ms,
-            );
-        }
-
-        tracing::info!(
-            "[f{}] {} chunk {}/{}: {} bytes in {}ms",
-            self.file_id,
-            self.name,
-            idx + 1,
-            self.chunk_count,
-            data.len(),
-            elapsed_ms,
-        );
-
-        self.schedule_next_and_prefetch();
-    }
-
-    async fn on_chunk_failed(&mut self, idx: usize, error: Arc<String>) {
-        tracing::warn!("[f{}] chunk {} failed: {}", self.file_id, idx, error);
-        self.inflight.remove(&idx);
-        self.forward_error(anyhow::anyhow!("{error}")).await;
-    }
-
-    fn on_tick_backpressure(&mut self) {
-        let total = self.subscribers.len();
-        if total == 0 {
-            self.backpressure_ratio = 0.0;
+    fn ensure_running(self: &Arc<Self>) {
+        let mut task_guard = self.task.lock_or_recover();
+        if task_guard.is_some() {
             return;
         }
-        let mut blocked = 0usize;
-        for (_, _, tx) in &self.subscribers {
-            if tx.capacity() == 0 {
-                blocked += 1;
-            }
-        }
-        self.backpressure_ratio = blocked as f64 / total as f64;
+        let self_clone = self.clone();
+        *task_guard = Some(tokio::spawn(async move {
+            self_clone.run_download_loop().await;
+        }));
     }
 
-    fn schedule_next_and_prefetch(&mut self) {
-        if let Some(idx) = self.select_next_chunk_priority() {
-            self.inflight.insert(idx);
-            let start = (idx * CHUNK_SIZE) as u64;
-            let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
+    async fn run_download_loop(self: Arc<Self>) {
+        let session_start = std::time::Instant::now();
 
-            // Spawn a chunk watcher that bridges SessionTable broadcast → mailbox
-            let mailbox = self.mailbox_tx.clone();
-            let session_table = self.session_table.clone();
-            let url = self.url.clone();
-            let user_agent = self.user_agent.clone();
-            let cached_chunks = self.cached_chunks.clone();
-            let fid = self.file_id;
-            let cidx = idx as i64;
+        tracing::info!(
+            "[f{}] {}: session started, {} chunks total",
+            self.file_id,
+            self.name,
+            self.chunk_count,
+        );
 
-            tokio::spawn(async move {
+        let chunk_sz = CHUNK_SIZE as u64;
+
+        let mut completed: HashSet<usize> = HashSet::new();
+        loop {
+            let client_ranges: Vec<(u64, u64)> = {
+                let subs = self.subscribers.lock_or_recover();
+                subs.iter().map(|(r, _)| *r).collect()
+            };
+
+            tracing::debug!(
+                "[f{}] {}: loop start, subscribers={}, completed={}/{}",
+                self.file_id,
+                self.name,
+                client_ranges.len(),
+                completed.len(),
+                self.chunk_count,
+            );
+
+            if client_ranges.is_empty() {
+                self.state.store(2, Ordering::Relaxed);
+                self.subscribers.lock_or_recover().clear();
+                break;
+            }
+
+            let active_cursors =
+                compute_active_cursors(&client_ranges, &completed, chunk_sz, self.chunk_count);
+
+            if let Some(i) =
+                select_next_chunk(&client_ranges, &completed, chunk_sz, self.chunk_count)
+            {
+                self.untrack_prefetch(i);
+                let start = (i * CHUNK_SIZE) as u64;
+                let end = std::cmp::min(start + CHUNK_SIZE as u64 - 1, self.total_size - 1);
+
                 let chunk_start = std::time::Instant::now();
-                let mut rx = match session_table
+                let mut rx = match self
+                    .session_table
                     .subscribe(
-                        fid,
-                        cidx,
-                        &url,
+                        self.file_id,
+                        i as i64,
+                        &self.url,
                         start,
                         end,
-                        0,
-                        0,
-                        user_agent.as_deref(),
-                        &cached_chunks,
+                        self.total_size,
+                        self.chunk_count,
+                        self.user_agent.as_deref(),
+                        &self.cached_chunks,
                     )
                     .await
                 {
                     Ok(rx) => rx,
                     Err(e) => {
-                        let _ = mailbox.send(SessionMessage::ChunkFailed {
-                            idx,
-                            error: Arc::new(e.to_string()),
-                        });
-                        return;
+                        self.forward_error(anyhow::anyhow!("chunk {i} subscribe failed: {e}"))
+                            .await;
+                        break;
                     }
                 };
 
                 match rx.recv().await {
                     Ok(Ok(data)) => {
-                        // Calculate sha256 from data for cached_chunks update
-                        let data_clone = data.clone();
-                        let sha256 =
-                            tokio::task::spawn_blocking(move || chunker::sha256_hex(&data_clone))
-                                .await
-                                .unwrap_or_else(|_| "unknown".to_string());
+                        let elapsed_ms = chunk_start.elapsed().as_millis();
+                        let chunk_start = i as u64 * chunk_sz;
+                        self.forward_chunk(chunk_start, &data).await;
+                        self.served_bytes
+                            .fetch_add(data.len() as u64, Ordering::Relaxed);
 
-                        let elapsed_ms: u64 = chunk_start.elapsed().as_millis() as u64;
-                        let _ = mailbox.send(SessionMessage::ChunkReady {
-                            idx,
-                            data,
-                            sha256,
+                        completed.insert(i);
+                        let active_prefetches = self.finish_prefetches(&completed, &HashSet::new());
+
+                        tracing::info!(
+                            "[f{}] {} chunk {}/{}: {} bytes in {}ms, prefetch_active={}",
+                            self.file_id,
+                            self.name,
+                            i + 1,
+                            self.chunk_count,
+                            data.len(),
                             elapsed_ms,
-                        });
+                            active_prefetches,
+                        );
+                        if elapsed_ms > 5_000 {
+                            tracing::warn!(
+                                "[f{}] {} chunk {}/{}: SLOW — {} bytes in {}ms, prefetch_active={}",
+                                self.file_id,
+                                self.name,
+                                i + 1,
+                                self.chunk_count,
+                                data.len(),
+                                elapsed_ms,
+                                active_prefetches,
+                            );
+                        }
+
+                        let budget =
+                            prefetch_budget(self.prefetch_budget_base, active_cursors.len());
+                        let per_cursor = (budget / active_cursors.len().max(1)).max(1);
+                        for cursor in active_cursors {
+                            for j in (cursor + 1)..(cursor + 1 + per_cursor).min(self.chunk_count) {
+                                if completed.contains(&j) {
+                                    continue;
+                                }
+                                if !self.track_prefetch(j) {
+                                    continue;
+                                }
+                                let pstart = (j * CHUNK_SIZE) as u64;
+                                let pend = std::cmp::min(
+                                    pstart + CHUNK_SIZE as u64 - 1,
+                                    self.total_size - 1,
+                                );
+                                let _ = self
+                                    .session_table
+                                    .subscribe(
+                                        self.file_id,
+                                        j as i64,
+                                        &self.url,
+                                        pstart,
+                                        pend,
+                                        self.total_size,
+                                        self.chunk_count,
+                                        self.user_agent.as_deref(),
+                                        &self.cached_chunks,
+                                    )
+                                    .await;
+                            }
+                        }
+                        self.finish_prefetches(&completed, &HashSet::new());
                     }
                     Ok(Err(err)) => {
-                        let _ = mailbox.send(SessionMessage::ChunkFailed { idx, error: err });
+                        self.forward_error(anyhow::anyhow!(err.as_ref().clone()))
+                            .await;
+                        break;
                     }
-                    Err(e) => {
-                        let _ = mailbox.send(SessionMessage::ChunkFailed {
-                            idx,
-                            error: Arc::new(format!("chunk receiver error: {e}")),
-                        });
+                    Err(broadcast::error::RecvError::Closed) => {
+                        self.forward_error(anyhow::anyhow!(
+                            "chunk {i} download closed unexpectedly"
+                        ))
+                        .await;
+                        break;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        self.forward_error(anyhow::anyhow!(
+                            "chunk {i} receiver lagged by {n} messages"
+                        ))
+                        .await;
+                        break;
                     }
                 }
-            });
-        }
-
-        // Schedule prefetches
-        self.schedule_prefetches();
-
-        // No chunks to schedule or in-flight → no more work will ever arrive.
-        // Close the mailbox so the run loop can exit rather than hang on recv().
-        if self.inflight.is_empty() {
-            self.mailbox_rx.close();
-        }
-    }
-
-    fn schedule_prefetches(&mut self) {
-        let active_cursors = self.compute_active_cursors();
-        if active_cursors.is_empty() {
-            return;
-        }
-
-        // Dynamic budget: adjust based on latency and backpressure
-        let budget = self.compute_prefetch_budget(active_cursors.len());
-        if budget == 0 {
-            return;
-        }
-
-        let per_cursor = (budget / active_cursors.len().max(1)).max(1);
-
-        for cursor in &active_cursors {
-            for j in (*cursor + 1)..(*cursor + 1 + per_cursor).min(self.chunk_count) {
-                if self.completed.contains(&j) || self.inflight.contains(&j) {
-                    continue;
-                }
-                self.inflight.insert(j);
-
-                let mailbox = self.mailbox_tx.clone();
-                let session_table = self.session_table.clone();
-                let url = self.url.clone();
-                let user_agent = self.user_agent.clone();
-                let cached_chunks = self.cached_chunks.clone();
-                let fid = self.file_id;
-                let cidx = j as i64;
-                let pstart = (j * CHUNK_SIZE) as u64;
-                let pend = std::cmp::min(pstart + CHUNK_SIZE as u64 - 1, self.total_size - 1);
-                let total_size = self.total_size;
-                let chunk_count = self.chunk_count;
-
-                tokio::spawn(async move {
-                    let chunk_start = std::time::Instant::now();
-                    let mut rx = match session_table
-                        .subscribe(
-                            fid,
-                            cidx,
-                            &url,
-                            pstart,
-                            pend,
-                            total_size,
-                            chunk_count,
-                            user_agent.as_deref(),
-                            &cached_chunks,
-                        )
-                        .await
-                    {
-                        Ok(rx) => rx,
-                        Err(e) => {
-                            let _ = mailbox.send(SessionMessage::ChunkFailed {
-                                idx: j,
-                                error: Arc::new(e.to_string()),
-                            });
-                            return;
-                        }
-                    };
-
-                    match rx.recv().await {
-                        Ok(Ok(data)) => {
-                            let data_clone = data.clone();
-                            let sha256 = tokio::task::spawn_blocking(move || {
-                                chunker::sha256_hex(&data_clone)
-                            })
-                            .await
-                            .unwrap_or_else(|_| "unknown".to_string());
-
-                            let elapsed_ms: u64 = chunk_start.elapsed().as_millis() as u64;
-                            let _ = mailbox.send(SessionMessage::ChunkReady {
-                                idx: j,
-                                data,
-                                sha256,
-                                elapsed_ms,
-                            });
-                        }
-                        Ok(Err(err)) => {
-                            let _ =
-                                mailbox.send(SessionMessage::ChunkFailed { idx: j, error: err });
-                        }
-                        Err(e) => {
-                            let _ = mailbox.send(SessionMessage::ChunkFailed {
-                                idx: j,
-                                error: Arc::new(format!("chunk receiver error: {e}")),
-                            });
-                        }
-                    }
-                });
+            } else {
+                self.state.store(2, Ordering::Relaxed);
+                self.subscribers.lock_or_recover().clear();
+                break;
             }
+
+            self.clean_subscribers();
         }
+
+        self.subscribers.lock_or_recover().clear();
+
+        tracing::info!(
+            "[f{}] {}: session finished in {}ms, prefetch_active={}, all senders dropped",
+            self.file_id,
+            self.name,
+            session_start.elapsed().as_millis(),
+            self.prefetch_active(),
+        );
+
+        self.task.lock_or_recover().take();
     }
 
-    fn compute_prefetch_budget(&self, active_cursor_count: usize) -> usize {
-        let base = self.prefetch_budget_base;
+    fn track_prefetch(&self, idx: usize) -> bool {
+        self.inflight_prefetches.lock_or_recover().insert(idx)
+    }
 
-        // Dynamic scaling based on observed latency
-        let latency_factor = if self.avg_latency_ms < 500.0 {
-            1.5
-        } else if self.avg_latency_ms < 5000.0 {
-            1.0
-        } else {
-            0.5
+    fn untrack_prefetch(&self, idx: usize) {
+        self.inflight_prefetches.lock_or_recover().remove(&idx);
+    }
+
+    fn finish_prefetches(&self, completed: &HashSet<usize>, cached: &HashSet<usize>) -> usize {
+        let mut inflight = self.inflight_prefetches.lock_or_recover();
+        retain_active_prefetches(&mut inflight, completed, cached)
+    }
+
+    fn prefetch_active(&self) -> usize {
+        self.inflight_prefetches.lock_or_recover().len()
+    }
+
+    async fn forward_chunk(&self, chunk_start: u64, data: &[u8]) {
+        let targets: Vec<(ClientRange, ClientSender)> = {
+            let subs = self.subscribers.lock_or_recover();
+            subs.iter()
+                .map(|((s, e), tx)| ((*s, *e), tx.clone()))
+                .collect()
         };
-
-        // Backpressure scaling: if more than half the subscriber channels are full, reduce
-        let bp_factor = if self.backpressure_ratio > 0.5 {
-            0.25
-        } else if self.backpressure_ratio > 0.25 {
-            0.5
-        } else {
-            1.0
-        };
-
-        let adjusted = (base as f64 * latency_factor * bp_factor).round() as usize;
-        prefetch_budget(adjusted.max(1), active_cursor_count)
-    }
-
-    fn compute_active_cursors(&self) -> Vec<usize> {
-        let mut cursors = Vec::new();
-        let max_idx = self.chunk_count.saturating_sub(1);
-        let chunk_sz = CHUNK_SIZE as u64;
-
-        for (start, end, _) in &self.subscribers {
-            let first = (*start / chunk_sz) as usize;
-            let last = ((*end / chunk_sz) as usize).min(max_idx);
-            if let Some(next) = (first..=last)
-                .find(|idx| !self.completed.contains(idx) && !self.inflight.contains(idx))
-            {
-                cursors.push(next);
-            }
-        }
-
-        cursors.sort_unstable();
-        cursors.dedup();
-        cursors
-    }
-
-    fn select_next_chunk_priority(&self) -> Option<usize> {
-        let chunk_sz = CHUNK_SIZE as u64;
-        let mut best: Option<(usize, f64)> = None;
-
-        for (start, end, _) in &self.subscribers {
-            let first_chunk = (*start / chunk_sz) as usize;
-            let last_chunk = ((*end / chunk_sz) as usize).min(self.chunk_count.saturating_sub(1));
-            let range_len = (*end - *start).max(1) as f64;
-
-            for idx in first_chunk..=last_chunk {
-                if self.completed.contains(&idx) || self.inflight.contains(&idx) {
-                    continue;
-                }
-                // Urgency: how far is this chunk from the subscriber's start, relative to their range
-                let chunk_byte_start = idx as u64 * chunk_sz;
-                let distance = if chunk_byte_start >= *start {
-                    (chunk_byte_start - *start) as f64
-                } else {
-                    0.0
-                };
-                let urgency = distance / range_len;
-                let is_better = match best {
-                    Some((_, best_urgency)) => urgency < best_urgency,
-                    None => true,
-                };
-                if is_better {
-                    best = Some((idx, urgency));
-                }
-            }
-        }
-
-        best.map(|(idx, _)| idx)
-    }
-
-    async fn forward_chunk(&self, chunk_start: u64, data: &Arc<Bytes>) {
-        let chunk_end = chunk_start + data.len() as u64 - 1;
-        for (s, e, tx) in &self.subscribers {
+        for ((s, e), tx) in &targets {
+            let chunk_end = chunk_start + data.len() as u64 - 1;
             if chunk_end < *s || chunk_start > *e {
                 continue;
             }
@@ -911,20 +736,26 @@ impl FileSessionActor {
 
     async fn forward_error(&self, err: anyhow::Error) {
         let message = err.to_string();
-        for (_, _, tx) in &self.subscribers {
+        let targets: Vec<ClientSender> = {
+            let subs = self.subscribers.lock_or_recover();
+            subs.iter().map(|(_, tx)| tx.clone()).collect()
+        };
+        for tx in &targets {
             let _ = tx.send(Err(anyhow::anyhow!(message.clone()))).await;
         }
     }
 
-    fn clean_subscribers(&mut self) {
-        self.subscribers.retain(|(_, _, tx)| !tx.is_closed());
+    fn clean_subscribers(&self) {
+        let mut subs = self.subscribers.lock_or_recover();
+        subs.retain(|(_, tx)| !tx.is_closed());
+        self.subscriber_count.store(subs.len(), Ordering::Relaxed);
     }
 }
 
 // ── FileSessionManager ────────────────────────────────────────
 
 pub struct FileSessionManager {
-    map: DashMap<i64, (ActorHandle, JoinHandle<()>)>,
+    map: DashMap<i64, Arc<FileDownloadSession>>,
     session_table: Arc<SessionTable>,
     served_bytes: Arc<AtomicU64>,
 }
@@ -949,34 +780,29 @@ impl FileSessionManager {
         user_agent: Option<&str>,
         cached_chunks: HashMap<usize, String>,
         file: File,
-    ) -> ActorHandle {
-        // Replace stale entry whose actor has exited (mailbox closed)
-        if let Some(entry) = self.map.get(&file_id) {
-            if entry.0.mailbox.is_closed() {
-                drop(entry);
-                self.map.remove(&file_id);
-            }
-        }
-
+    ) -> Arc<FileDownloadSession> {
         self.map
             .entry(file_id)
             .or_insert_with(|| {
                 let chunk_count = (total_size as usize).div_ceil(CHUNK_SIZE);
-                FileSessionActor::spawn(
-                    file_id,
-                    name.to_string(),
-                    url.to_string(),
-                    total_size,
-                    chunk_count,
-                    user_agent.map(str::to_string),
-                    prefetch_budget_base,
-                    self.session_table.clone(),
-                    self.served_bytes.clone(),
-                    cached_chunks,
-                    file,
-                )
+                Arc::new(FileDownloadSession::new(
+                    FileDownloadSessionConfig {
+                        file_id,
+                        name: name.to_string(),
+                        url: url.to_string(),
+                        total_size,
+                        chunk_count,
+                        user_agent: user_agent.map(str::to_string),
+                        prefetch_budget_base,
+                        cached_chunks: StdMutex::new(cached_chunks),
+                        file,
+                    },
+                    FileDownloadSessionDeps {
+                        session_table: self.session_table.clone(),
+                        served_bytes: self.served_bytes.clone(),
+                    },
+                ))
             })
-            .0
             .clone()
     }
 
@@ -988,306 +814,175 @@ impl FileSessionManager {
 #[cfg(test)]
 mod tests {
     use super::{
-        prefetch_budget, ChunkStoredEvent, FileSessionActor, LockExt, SessionTable, CHUNK_SIZE,
+        compute_active_cursors, prefetch_budget, retain_active_prefetches, select_next_chunk,
+        ChunkStoredEvent, FileDownloadSession, FileDownloadSessionConfig, FileDownloadSessionDeps,
+        LockExt,
     };
-    use crate::storage::StorageBackend;
+    use crate::config::Config;
+    use crate::metadata::File;
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Mutex as StdMutex};
     use tempfile::TempDir;
+    use tokio::task::JoinHandle;
 
     use axum::{extract::State as AxumState, http::StatusCode, routing::get, Router};
-    use bytes::Bytes;
 
-    /// Helper: build a minimal FileSessionActor for unit-testing private methods.
-    fn test_actor() -> FileSessionActor {
-        let _dir = TempDir::new().unwrap();
-        let (mailbox_tx, mailbox_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
-        let backend: Arc<dyn StorageBackend> = Arc::new(crate::storage::local::LocalBackend::new(
-            _dir.path().join("chunks"),
-            crate::storage::Compression::None,
-        ));
-        let session_table = Arc::new(SessionTable::new(
-            reqwest::Client::new(),
-            backend,
-            event_tx,
-            Arc::new(AtomicU64::new(0)),
-            true,
-        ));
-        FileSessionActor {
-            mailbox_rx,
-            mailbox_tx,
-            file_id: 1,
-            name: "test".into(),
-            url: "http://localhost/test".into(),
-            total_size: 4 * CHUNK_SIZE as u64,
-            chunk_count: 4,
-            user_agent: None,
-            prefetch_budget_base: 8,
-            session_table,
-            served_bytes: Arc::new(AtomicU64::new(0)),
-            subscribers: Vec::new(),
-            completed: HashSet::new(),
-            inflight: HashSet::new(),
-            cached_chunks: Arc::new(StdMutex::new(HashMap::new())),
-            avg_latency_ms: 1000.0,
-            backpressure_ratio: 0.0,
-            pending_metadata: 0,
+    fn dummy_file() -> File {
+        File {
+            id: 1,
+            name: "test.bin".to_string(),
+            repo: "test/repo".to_string(),
+            total_size: crate::service::CHUNK_SIZE as i64,
+            created_at: String::new(),
+            last_accessed: String::new(),
+            source: "hf".to_string(),
+            etag: None,
+            x_repo_commit: None,
+            x_linked_size: None,
+            x_linked_etag: None,
+            content_type: None,
         }
     }
 
-    // ── prefetch_budget (free function) ───────────────────────
+    #[test]
+    fn single_subscriber_picks_smallest_incomplete_chunk() {
+        let completed = HashSet::from([0usize, 1, 2]);
+        let client_ranges = vec![(0u64, 9 * 4 * 1024 * 1024u64)];
+
+        let next = select_next_chunk(&client_ranges, &completed, 4 * 1024 * 1024, 10);
+
+        assert_eq!(next, Some(3));
+    }
 
     #[test]
-    fn prefetch_budget_scales_with_active_cursors() {
-        assert_eq!(prefetch_budget(8, 0), 8);
+    fn active_cursors_deduplicate_and_budget_drops_with_more_cursors() {
+        let completed = HashSet::new();
+        let client_ranges = vec![
+            (0u64, 9 * 4 * 1024 * 1024u64),
+            (0u64, 9 * 4 * 1024 * 1024u64),
+            (20 * 4 * 1024 * 1024u64, 29 * 4 * 1024 * 1024u64),
+        ];
+
+        let cursors = compute_active_cursors(&client_ranges, &completed, 4 * 1024 * 1024, 30);
+
+        assert_eq!(cursors, vec![0, 20]);
         assert_eq!(prefetch_budget(8, 1), 8);
         assert_eq!(prefetch_budget(8, 2), 4);
         assert_eq!(prefetch_budget(8, 3), 2);
     }
 
-    // ── compute_prefetch_budget (actor method) ────────────────
-
     #[test]
-    fn compute_prefetch_budget_scales_with_latency() {
-        let mut actor = test_actor();
-        actor.prefetch_budget_base = 8;
-        actor.backpressure_ratio = 0.0;
+    fn config_defaults_prefetch_budget_base_to_eight() {
+        let config = Config::default();
 
-        // Medium latency (500–5000ms) → 1.0× factor, 1 cursor → base
-        actor.avg_latency_ms = 1000.0;
-        assert_eq!(actor.compute_prefetch_budget(1), 8);
-
-        // Fast latency (<500ms) → 1.5× → 8 * 1.5 = 12
-        actor.avg_latency_ms = 200.0;
-        assert_eq!(actor.compute_prefetch_budget(1), 12);
-
-        // Slow latency (>5000ms) → 0.5× → 8 * 0.5 = 4
-        actor.avg_latency_ms = 10_000.0;
-        assert_eq!(actor.compute_prefetch_budget(1), 4);
+        assert_eq!(config.storage.prefetch_budget_base, 8);
     }
 
     #[test]
-    fn compute_prefetch_budget_respects_backpressure() {
-        let mut actor = test_actor();
-        actor.prefetch_budget_base = 8;
-        actor.avg_latency_ms = 1000.0; // neutral latency
+    fn retain_active_prefetches_drops_completed_and_cached_chunks() {
+        let mut inflight = HashSet::from([18usize, 19, 20, 21]);
+        let completed = HashSet::from([18usize]);
+        let cached = HashSet::from([20usize]);
 
-        // No backpressure → 1.0×
-        actor.backpressure_ratio = 0.0;
-        assert_eq!(actor.compute_prefetch_budget(1), 8);
+        let active = retain_active_prefetches(&mut inflight, &completed, &cached);
 
-        // Medium backpressure (0.25–0.5) → 0.5× → 8 / 2 = 4
-        actor.backpressure_ratio = 0.3;
-        assert_eq!(actor.compute_prefetch_budget(1), 4);
-
-        // High backpressure (>0.5) → 0.25× → (8 * 0.25) = 2
-        actor.backpressure_ratio = 0.6;
-        assert_eq!(actor.compute_prefetch_budget(1), 2);
-    }
-
-    #[test]
-    fn compute_prefetch_budget_divides_among_cursors() {
-        let mut actor = test_actor();
-        actor.prefetch_budget_base = 8;
-        actor.avg_latency_ms = 1000.0;
-        actor.backpressure_ratio = 0.0;
-
-        // 2 cursors → budget = base/2 = 4
-        assert_eq!(actor.compute_prefetch_budget(2), 4);
-
-        // 3+ cursors → budget = base/4 = 2
-        assert_eq!(actor.compute_prefetch_budget(3), 2);
-        assert_eq!(actor.compute_prefetch_budget(4), 2);
-    }
-
-    // ── select_next_chunk_priority ────────────────────────────
-
-    #[test]
-    fn select_next_chunk_priority_picks_closest_to_subscriber_start() {
-        let mut actor = test_actor();
-        actor.chunk_count = 10;
-        let (tx, _rx) = tokio::sync::mpsc::channel(32);
-
-        // Subscriber wants bytes 1*CHUNK_SIZE .. 4*CHUNK_SIZE-1
-        actor
-            .subscribers
-            .push((CHUNK_SIZE as u64, 4 * CHUNK_SIZE as u64 - 1, tx));
-
-        // Urgency: chunk 1 (byte offset = CHUNK_SIZE) is closest to subscriber start
-        assert_eq!(actor.select_next_chunk_priority(), Some(1));
-
-        // Mark chunk 1 done → chunk 2 becomes most urgent
-        actor.completed.insert(1);
-        assert_eq!(actor.select_next_chunk_priority(), Some(2));
-    }
-
-    #[test]
-    fn select_next_chunk_priority_returns_none_when_all_done() {
-        let mut actor = test_actor();
-        actor.chunk_count = 10;
-        let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
-
-        // All chunks completed
-        for i in 0..10 {
-            actor.completed.insert(i);
-        }
-        assert_eq!(actor.select_next_chunk_priority(), None);
-    }
-
-    #[test]
-    fn select_next_chunk_priority_skips_inflight_chunks() {
-        let mut actor = test_actor();
-        actor.chunk_count = 10;
-        let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
-
-        // Chunks 0 and 1 are in-flight, not yet completed
-        actor.inflight.insert(0);
-        actor.inflight.insert(1);
-
-        // Should pick the first available chunk: 2
-        assert_eq!(actor.select_next_chunk_priority(), Some(2));
-    }
-
-    #[test]
-    fn select_next_chunk_priority_handles_two_subscribers() {
-        let mut actor = test_actor();
-        actor.chunk_count = 20;
-        let (tx1, _rx1) = tokio::sync::mpsc::channel(32);
-        let (tx2, _rx2) = tokio::sync::mpsc::channel(32);
-
-        // Subscriber A: bytes 0..4*CHUNK_SIZE-1
-        actor.subscribers.push((0, 4 * CHUNK_SIZE as u64 - 1, tx1));
-        // Subscriber B: bytes 10*CHUNK_SIZE..14*CHUNK_SIZE-1
-        actor
-            .subscribers
-            .push((10 * CHUNK_SIZE as u64, 14 * CHUNK_SIZE as u64 - 1, tx2));
-
-        // Most urgent: chunk 0 (closest to subscriber A's start, distance=0)
-        assert_eq!(actor.select_next_chunk_priority(), Some(0));
-
-        // Complete chunks 0..4 for subscriber A
-        for i in 0..5 {
-            actor.completed.insert(i);
-        }
-        // Now most urgent: chunk 10 (closest to subscriber B's start)
-        assert_eq!(actor.select_next_chunk_priority(), Some(10));
-    }
-
-    // ── compute_active_cursors ────────────────────────────────
-
-    #[test]
-    fn compute_active_cursors_finds_next_missing_for_each_subscriber() {
-        let mut actor = test_actor();
-        actor.chunk_count = 10;
-        let (tx1, _rx1) = tokio::sync::mpsc::channel(32);
-        let (tx2, _rx2) = tokio::sync::mpsc::channel(32);
-
-        actor.subscribers.push((0, 4 * CHUNK_SIZE as u64 - 1, tx1));
-        actor
-            .subscribers
-            .push((6 * CHUNK_SIZE as u64, 9 * CHUNK_SIZE as u64 - 1, tx2));
-
-        // No chunks done → cursors at 0 and 6
-        let cursors = actor.compute_active_cursors();
-        assert_eq!(cursors, vec![0, 6]);
-
-        // Complete chunk 0 for sub A → its cursor advances to 1
-        actor.completed.insert(0);
-        let cursors = actor.compute_active_cursors();
-        assert_eq!(cursors, vec![1, 6]);
-    }
-
-    #[test]
-    fn compute_active_cursors_excludes_inflight_chunks() {
-        let mut actor = test_actor();
-        actor.chunk_count = 10;
-        let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
-
-        // Chunk 0 is in-flight → cursor should be 1
-        actor.inflight.insert(0);
-        let cursors = actor.compute_active_cursors();
-        assert_eq!(cursors, vec![1]);
-    }
-
-    // ── on_tick_backpressure ──────────────────────────────────
-
-    #[tokio::test]
-    async fn on_tick_backpressure_detects_blocked_channels() {
-        let mut actor = test_actor();
-        // Use capacity-1 channels so a single send fills them
-        let (tx1, _rx1) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
-        let (tx2, _rx2) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(1);
-
-        actor.subscribers.push((0, 100, tx1.clone()));
-        actor.subscribers.push((0, 100, tx2.clone()));
-
-        // Both channels start empty → no backpressure
-        actor.on_tick_backpressure();
-        assert_eq!(actor.backpressure_ratio, 0.0);
-
-        // Fill both channels (capacity-1, one send is enough)
-        let _ = tx1.send(Ok(Bytes::from("a"))).await;
-        let _ = tx2.send(Ok(Bytes::from("b"))).await;
-
-        actor.on_tick_backpressure();
-        assert_eq!(actor.backpressure_ratio, 1.0);
-
-        // Drop one receiver → its sender becomes closed but not "full"
-        drop(_rx1);
-        // After dropping, the sender's capacity becomes 0 anyway (broken pipe).
-        // Check that at least ratio is non-zero.
-        actor.on_tick_backpressure();
-        assert!(actor.backpressure_ratio > 0.0);
-    }
-
-    // ── forward_chunk ─────────────────────────────────────────
-
-    #[tokio::test]
-    async fn forward_chunk_sends_relevant_slice_to_each_subscriber() {
-        let mut actor = test_actor();
-        let (tx1, mut rx1) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
-        let (tx2, mut rx2) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
-
-        // Sub A: wants bytes 100..299  (overlaps with chunk starting at 0*CHUNK_SIZE)
-        // Sub B: wants bytes 500..799  (overlaps with chunk starting at 0*CHUNK_SIZE)
-        actor.subscribers.push((100, 299, tx1));
-        actor.subscribers.push((500, 799, tx2));
-
-        let chunk_data = Arc::new(Bytes::from(vec![0u8; CHUNK_SIZE])); // 4MB chunk
-        let chunk_start = 0u64; // chunk 0
-
-        actor.forward_chunk(chunk_start, &chunk_data).await;
-
-        // Sub A should get bytes 100..299 (200 bytes)
-        let received1 = rx1.try_recv().unwrap().unwrap();
-        assert_eq!(received1.len(), 200);
-
-        // Sub B should get bytes 500..799 (300 bytes)
-        let received2 = rx2.try_recv().unwrap().unwrap();
-        assert_eq!(received2.len(), 300);
+        assert_eq!(active, 2);
+        assert_eq!(inflight, HashSet::from([19usize, 21]));
     }
 
     #[tokio::test]
-    async fn forward_chunk_skips_non_overlapping_subscribers() {
-        let mut actor = test_actor();
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+    async fn finished_session_clears_task_slot() {
+        let _dir = TempDir::new().unwrap();
+        let fetched_bytes = Arc::new(AtomicU64::new(0));
+        let served_bytes = Arc::new(AtomicU64::new(0));
+        let client = reqwest::Client::new();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ));
+        let session_table = Arc::new(super::SessionTable::new(
+            client,
+            backend,
+            event_tx,
+            fetched_bytes,
+            true,
+        ));
 
-        // Subscriber wants bytes in chunk 5 (offset 5*CHUNK_SIZE)
-        actor
-            .subscribers
-            .push((5 * CHUNK_SIZE as u64, 6 * CHUNK_SIZE as u64 - 1, tx));
+        let session = Arc::new(FileDownloadSession::new(
+            FileDownloadSessionConfig {
+                file_id: 1,
+                name: "test.bin".to_string(),
+                url: "http://localhost/test.bin".to_string(),
+                total_size: crate::service::CHUNK_SIZE as u64,
+                chunk_count: 1,
+                user_agent: None,
+                prefetch_budget_base: 8,
+                cached_chunks: StdMutex::new(HashMap::new()),
+                file: dummy_file(),
+            },
+            FileDownloadSessionDeps {
+                session_table,
+                served_bytes,
+            },
+        ));
 
-        // Forward chunk 0 (offset 0) — does NOT overlap with subscriber
-        let chunk_data = Arc::new(Bytes::from(vec![0u8; CHUNK_SIZE]));
-        actor.forward_chunk(0, &chunk_data).await;
+        *session.task.lock_or_recover() = Some(tokio::spawn(async {}) as JoinHandle<()>);
 
-        // Subscriber should NOT receive anything for this chunk
-        assert!(rx.try_recv().is_err());
+        session.clone().run_download_loop().await;
+
+        assert!(session.task.lock_or_recover().is_none());
+    }
+
+    #[tokio::test]
+    async fn file_session_tracks_prefetch_state() {
+        let _dir = TempDir::new().unwrap();
+        let fetched_bytes = Arc::new(AtomicU64::new(0));
+        let served_bytes = Arc::new(AtomicU64::new(0));
+        let client = reqwest::Client::new();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
+        let backend: Arc<dyn crate::storage::StorageBackend> =
+            Arc::new(crate::storage::local::LocalBackend::new(
+                _dir.path().join("chunks"),
+                crate::storage::Compression::None,
+            ));
+        let session_table = Arc::new(super::SessionTable::new(
+            client,
+            backend,
+            event_tx,
+            fetched_bytes,
+            true,
+        ));
+
+        let session = FileDownloadSession::new(
+            FileDownloadSessionConfig {
+                file_id: 1,
+                name: "test.bin".to_string(),
+                url: "http://localhost/test.bin".to_string(),
+                total_size: crate::service::CHUNK_SIZE as u64,
+                chunk_count: 8,
+                user_agent: None,
+                prefetch_budget_base: 8,
+                cached_chunks: StdMutex::new(HashMap::new()),
+                file: dummy_file(),
+            },
+            FileDownloadSessionDeps {
+                session_table,
+                served_bytes,
+            },
+        );
+
+        session.track_prefetch(18);
+        session.track_prefetch(19);
+        session.track_prefetch(20);
+
+        let active =
+            session.finish_prefetches(&HashSet::from([18usize]), &HashSet::from([20usize]));
+
+        assert_eq!(active, 1);
+        assert_eq!(session.prefetch_active(), 1);
     }
 
     #[tokio::test]
