@@ -354,7 +354,7 @@ impl ChunkReader {
 // ── Actor Messages ────────────────────────────────────────────
 
 /// Messages for the actor-based file session.
-pub enum SessionMsg {
+pub enum SessionMessage {
     Subscribe {
         reply: mpsc::Sender<Result<Bytes, anyhow::Error>>,
         file: Box<File>,
@@ -370,6 +370,10 @@ pub enum SessionMsg {
         idx: usize,
         error: Arc<String>,
     },
+    /// A metadata write for a chunk has been persisted to the database.
+    MetadataWritten {
+        idx: usize,
+    },
     TickBackpressure,
 }
 
@@ -378,7 +382,7 @@ pub enum SessionMsg {
 /// Handle to communicate with a FileSessionActor.
 #[derive(Clone)]
 pub struct ActorHandle {
-    pub(crate) mailbox: mpsc::UnboundedSender<SessionMsg>,
+    pub(crate) mailbox: mpsc::UnboundedSender<SessionMessage>,
     pub(crate) file: File,
     pub(crate) total_size: u64,
 }
@@ -404,7 +408,7 @@ impl ActorHandle {
 
         if self
             .mailbox
-            .send(SessionMsg::Subscribe {
+            .send(SessionMessage::Subscribe {
                 reply: tx,
                 file: Box::new(self.file.clone()),
                 range: (req_start, req_end),
@@ -426,8 +430,8 @@ impl ActorHandle {
 
 struct FileSessionActor {
     // Mailbox
-    mailbox_rx: mpsc::UnboundedReceiver<SessionMsg>,
-    mailbox_tx: mpsc::UnboundedSender<SessionMsg>,
+    mailbox_rx: mpsc::UnboundedReceiver<SessionMessage>,
+    mailbox_tx: mpsc::UnboundedSender<SessionMessage>,
     // Fixed config
     file_id: i64,
     name: String,
@@ -445,6 +449,8 @@ struct FileSessionActor {
     cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
     avg_latency_ms: f64,
     backpressure_ratio: f64,
+    /// Number of chunk metadata writes not yet confirmed by the database.
+    pending_metadata: usize,
 }
 
 impl FileSessionActor {
@@ -462,7 +468,7 @@ impl FileSessionActor {
         cached_chunks: HashMap<usize, String>,
         file: File,
     ) -> (ActorHandle, JoinHandle<()>) {
-        let (mailbox_tx, mailbox_rx) = mpsc::unbounded_channel::<SessionMsg>();
+        let (mailbox_tx, mailbox_rx) = mpsc::unbounded_channel::<SessionMessage>();
 
         let mailbox_tx_clone = mailbox_tx.clone();
 
@@ -490,6 +496,7 @@ impl FileSessionActor {
             cached_chunks: Arc::new(StdMutex::new(cached_chunks)),
             avg_latency_ms: 1000.0, // initial estimate
             backpressure_ratio: 0.0,
+            pending_metadata: 0,
         };
 
         let join_handle = tokio::spawn(actor.run());
@@ -509,10 +516,10 @@ impl FileSessionActor {
 
         while let Some(msg) = self.mailbox_rx.recv().await {
             match msg {
-                SessionMsg::Subscribe { reply, file, range } => {
+                SessionMessage::Subscribe { reply, file, range } => {
                     self.on_subscribe(reply, *file, range).await;
                 }
-                SessionMsg::ChunkReady {
+                SessionMessage::ChunkReady {
                     idx,
                     data,
                     sha256,
@@ -520,17 +527,21 @@ impl FileSessionActor {
                 } => {
                     self.on_chunk_ready(idx, data, sha256, elapsed_ms).await;
                 }
-                SessionMsg::ChunkFailed { idx, error } => {
+                SessionMessage::ChunkFailed { idx, error } => {
                     self.on_chunk_failed(idx, error).await;
                     break;
                 }
-                SessionMsg::TickBackpressure => {
+                SessionMessage::MetadataWritten { idx: _idx } => {
+                    self.pending_metadata -= 1;
+                }
+                SessionMessage::TickBackpressure => {
                     self.on_tick_backpressure();
                 }
             }
 
             self.clean_subscribers();
-            if self.subscribers.is_empty() && self.inflight.is_empty() {
+            if self.subscribers.is_empty() && self.inflight.is_empty() && self.pending_metadata == 0
+            {
                 break;
             }
         }
@@ -658,7 +669,7 @@ impl FileSessionActor {
                 {
                     Ok(rx) => rx,
                     Err(e) => {
-                        let _ = mailbox.send(SessionMsg::ChunkFailed {
+                        let _ = mailbox.send(SessionMessage::ChunkFailed {
                             idx,
                             error: Arc::new(e.to_string()),
                         });
@@ -676,7 +687,7 @@ impl FileSessionActor {
                                 .unwrap_or_else(|_| "unknown".to_string());
 
                         let elapsed_ms: u64 = chunk_start.elapsed().as_millis() as u64;
-                        let _ = mailbox.send(SessionMsg::ChunkReady {
+                        let _ = mailbox.send(SessionMessage::ChunkReady {
                             idx,
                             data,
                             sha256,
@@ -684,10 +695,10 @@ impl FileSessionActor {
                         });
                     }
                     Ok(Err(err)) => {
-                        let _ = mailbox.send(SessionMsg::ChunkFailed { idx, error: err });
+                        let _ = mailbox.send(SessionMessage::ChunkFailed { idx, error: err });
                     }
                     Err(e) => {
-                        let _ = mailbox.send(SessionMsg::ChunkFailed {
+                        let _ = mailbox.send(SessionMessage::ChunkFailed {
                             idx,
                             error: Arc::new(format!("chunk receiver error: {e}")),
                         });
@@ -757,7 +768,7 @@ impl FileSessionActor {
                     {
                         Ok(rx) => rx,
                         Err(e) => {
-                            let _ = mailbox.send(SessionMsg::ChunkFailed {
+                            let _ = mailbox.send(SessionMessage::ChunkFailed {
                                 idx: j,
                                 error: Arc::new(e.to_string()),
                             });
@@ -775,7 +786,7 @@ impl FileSessionActor {
                             .unwrap_or_else(|_| "unknown".to_string());
 
                             let elapsed_ms: u64 = chunk_start.elapsed().as_millis() as u64;
-                            let _ = mailbox.send(SessionMsg::ChunkReady {
+                            let _ = mailbox.send(SessionMessage::ChunkReady {
                                 idx: j,
                                 data,
                                 sha256,
@@ -783,10 +794,11 @@ impl FileSessionActor {
                             });
                         }
                         Ok(Err(err)) => {
-                            let _ = mailbox.send(SessionMsg::ChunkFailed { idx: j, error: err });
+                            let _ =
+                                mailbox.send(SessionMessage::ChunkFailed { idx: j, error: err });
                         }
                         Err(e) => {
-                            let _ = mailbox.send(SessionMsg::ChunkFailed {
+                            let _ = mailbox.send(SessionMessage::ChunkFailed {
                                 idx: j,
                                 error: Arc::new(format!("chunk receiver error: {e}")),
                             });
@@ -1021,6 +1033,7 @@ mod tests {
             cached_chunks: Arc::new(StdMutex::new(HashMap::new())),
             avg_latency_ms: 1000.0,
             backpressure_ratio: 0.0,
+            pending_metadata: 0,
         }
     }
 
