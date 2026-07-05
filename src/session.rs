@@ -65,29 +65,6 @@ struct ChunkReader {
     write_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
-#[cfg(test)]
-impl ChunkReader {
-    pub(crate) fn new_for_test(backend: Arc<dyn StorageBackend>, verify_sha256: bool) -> Self {
-        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel::<ChunkStoredEvent>();
-        Self {
-            http_client: reqwest::Client::new(),
-            backend,
-            event_tx,
-            fetched_bytes: Arc::new(AtomicU64::new(0)),
-            verify_sha256,
-            write_locks: DashMap::new(),
-        }
-    }
-
-    pub(crate) async fn read_cached_chunk_test(
-        &self,
-        sha256: &str,
-        expected_chunk_size: Option<usize>,
-    ) -> anyhow::Result<Option<Bytes>> {
-        self.read_cached_chunk(sha256, expected_chunk_size).await
-    }
-}
-
 pub struct SessionTable {
     map: Arc<DashMap<(i64, i64), Arc<ChunkSession>>>,
     reader: Arc<ChunkReader>,
@@ -813,7 +790,7 @@ impl FileSessionManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{prefetch_budget, ChunkStoredEvent, FileSessionActor, SessionTable, CHUNK_SIZE};
+    use super::{prefetch_budget, FileSessionActor, SessionTable, CHUNK_SIZE};
     use crate::storage::StorageBackend;
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicU64;
