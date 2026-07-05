@@ -391,6 +391,7 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         true,
         reqwest::Client::new(),
         5,
+        3,
     )
 }
 
@@ -421,6 +422,7 @@ fn build_hugrs_router(upstream: &str, dir: &TempDir) -> Router {
             prefetch_budget_base: 8,
             verify_sha256: true,
             etag_validation_timeout_secs: 5,
+            chunk_retries: 3,
         },
         database: hugrs::config::DatabaseConfig {
             path: dir.path().join("http_db"),

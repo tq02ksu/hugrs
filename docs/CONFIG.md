@@ -75,6 +75,8 @@ hugrs --max-size 10737418240
 | `prefetch_depth` | integer | `0` (auto=CPU cores) | `HUGRS_PREFETCH_DEPTH` | Cache read prefetch depth. `0`=auto (max 16). Range 1–16 |
 | `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | Base chunk prefetch budget for streaming sessions. Effective budgets are `base`, `base/2`, `base/4` for 1, 2, and 3+ active cursors |
 | `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | Validate SHA256 on cached reads. Disable for higher throughput |
+| `etag_validation_timeout_secs` | integer | `5` | `HUGRS_ETAG_VALIDATION_TIMEOUT` | Timeout in seconds for upstream ETag validation HEAD requests. Set `0` to disable |
+| `chunk_retries` | integer | `3` | `HUGRS_CHUNK_RETRIES` | Max retries for transient chunk download failures (network errors, 5xx, body-read errors) |
 
 ### `[database]` — Database
 

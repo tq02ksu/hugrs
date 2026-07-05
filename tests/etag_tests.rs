@@ -114,6 +114,7 @@ fn make_svc(dir: &TempDir) -> CacheService {
         true,
         reqwest::Client::new(),
         5,
+        3,
     )
 }
 

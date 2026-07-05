@@ -87,6 +87,9 @@ pub struct DaemonCli {
 
     #[arg(long)]
     pub etag_validation_timeout_secs: Option<u64>,
+
+    #[arg(long = "chunk-retries")]
+    pub chunk_retries: Option<u32>,
 }
 
 impl DaemonCli {
@@ -120,6 +123,7 @@ impl DaemonCli {
             prefetch_budget_base: self.prefetch_budget_base,
             enable_sha256_verify: self.enable_sha256_verify,
             etag_validation_timeout_secs: self.etag_validation_timeout_secs,
+            chunk_retries: self.chunk_retries,
         }
     }
 }

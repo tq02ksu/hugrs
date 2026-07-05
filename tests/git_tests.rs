@@ -135,6 +135,7 @@ fn make_service(dir: &TempDir, db_name: &str) -> CacheService {
         true,
         reqwest::Client::new(),
         5,
+        3,
     )
 }
 
@@ -167,6 +168,7 @@ fn build_git_router(upstream: &str, ms_upstream: Option<&str>, dir: &TempDir) ->
             prefetch_budget_base: 8,
             verify_sha256: true,
             etag_validation_timeout_secs: 5,
+            chunk_retries: 3,
         },
         database: hugrs::config::DatabaseConfig {
             path: dir.path().join("git_db"),
@@ -286,6 +288,7 @@ fn build_git_router_with_token(
             prefetch_budget_base: 8,
             verify_sha256: true,
             etag_validation_timeout_secs: 5,
+            chunk_retries: 3,
         },
         database: hugrs::config::DatabaseConfig {
             path: dir.path().join("git_tok_db"),
@@ -1156,6 +1159,7 @@ async fn test_git_info_refs_ms_uses_separate_upstream() {
             prefetch_budget_base: 8,
             verify_sha256: true,
             etag_validation_timeout_secs: 5,
+            chunk_retries: 3,
         },
         database: hugrs::config::DatabaseConfig {
             path: dir.path().join("sep_db"),

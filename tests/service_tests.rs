@@ -92,6 +92,7 @@ async fn test_seeded_file_chunks_reassemble_to_original_data() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     let data = b"hello hugrs cache service";
@@ -129,6 +130,7 @@ async fn test_delete_and_gc() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3]).await;
@@ -161,6 +163,7 @@ async fn test_stats() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     let stats = service.stats().await.unwrap();
@@ -198,6 +201,7 @@ async fn test_overwriting_seeded_file_updates_chunk_mapping() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "dup.bin", "repo-a", "hf", &[1, 2, 3]).await;
@@ -228,6 +232,7 @@ async fn test_lru_eviction() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "big.bin", "repo-big", "hf", &vec![0u8; 250]).await;
@@ -259,6 +264,7 @@ async fn test_lru_eviction_by_repo() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "a.txt", "repo-a", "hf", &[1u8; 100]).await;
@@ -291,6 +297,7 @@ async fn test_delete_marks_zero_ref_chunks_orphaned() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
@@ -327,6 +334,7 @@ async fn test_delete_does_not_remove_backend_data_immediately() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
@@ -362,6 +370,7 @@ async fn test_delete_without_source_removes_all_sources() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
@@ -397,6 +406,7 @@ async fn test_gc_dry_run_reports_orphan_candidates() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
@@ -430,6 +440,7 @@ async fn test_gc_execute_reclaims_orphan_backend_objects() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     seed_file(&service, "x.bin", "repo-a", "hf", &[1, 2, 3, 4]).await;
@@ -468,6 +479,7 @@ async fn test_gc_execute_batch_limits_one_server_side_batch() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     );
 
     for i in 0..40usize {

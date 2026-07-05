@@ -75,6 +75,8 @@ hugrs --max-size 10737418240
 | `prefetch_depth` | integer | `0`（自动=CPU核数） | `HUGRS_PREFETCH_DEPTH` | 缓存读取预读深度，`0`=自动（最多16），范围 1–16 |
 | `prefetch_budget_base` | integer | `8` | `HUGRS_PREFETCH_BUDGET_BASE` | 流式下载 session 的 chunk 预取预算基数。1 个活跃游标时用 `base`，2 个时用 `base/2`，3 个及以上时用 `base/4` |
 | `verify_sha256` | boolean | `true` | `HUGRS_VERIFY_SHA256` | 缓存读取时是否校验 SHA256，关闭可提升缓存读取速度 |
+| `etag_validation_timeout_secs` | integer | `5` | `HUGRS_ETAG_VALIDATION_TIMEOUT` | 上游 ETag 校验 HEAD 请求的超时秒数，设为 `0` 可禁用 |
+| `chunk_retries` | integer | `3` | `HUGRS_CHUNK_RETRIES` | 分块下载失败时的最大重试次数（网络错误、5xx、响应体读取错误） |
 
 ### `[database]` — 数据库配置
 

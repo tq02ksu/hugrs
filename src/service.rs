@@ -100,6 +100,7 @@ impl CacheService {
         verify_sha256: bool,
         stream_client: reqwest::Client,
         etag_validation_timeout: u64,
+        chunk_retries: u32,
     ) -> Self {
         let fetched_bytes = Arc::new(AtomicU64::new(0));
         let served_bytes = Arc::new(AtomicU64::new(0));
@@ -136,6 +137,7 @@ impl CacheService {
             event_tx,
             fetched_bytes.clone(),
             verify_sha256,
+            chunk_retries,
         ));
 
         let fs_manager = Arc::new(crate::session::FileSessionManager::new(

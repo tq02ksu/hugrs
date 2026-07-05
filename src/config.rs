@@ -57,6 +57,13 @@ pub struct StorageConfig {
 
     #[serde(default = "default_etag_validation_timeout")]
     pub etag_validation_timeout_secs: u64,
+
+    #[serde(default = "default_chunk_retries")]
+    pub chunk_retries: u32,
+}
+
+fn default_chunk_retries() -> u32 {
+    3
 }
 
 fn default_prefetch_depth() -> usize {
@@ -216,6 +223,7 @@ impl Default for StorageConfig {
             prefetch_budget_base: default_prefetch_budget_base(),
             verify_sha256: default_verify_sha256(),
             etag_validation_timeout_secs: default_etag_validation_timeout(),
+            chunk_retries: default_chunk_retries(),
         }
     }
 }
@@ -300,6 +308,7 @@ pub struct CliOverrides {
     pub prefetch_budget_base: Option<usize>,
     pub enable_sha256_verify: Option<bool>,
     pub etag_validation_timeout_secs: Option<u64>,
+    pub chunk_retries: Option<u32>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -344,6 +353,8 @@ struct StoragePatch {
     verify_sha256: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub etag_validation_timeout_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chunk_retries: Option<u32>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -493,6 +504,7 @@ fn cli_patch(overrides: CliOverrides) -> anyhow::Result<ConfigPatch> {
         overrides.prefetch_budget_base.is_some(),
         overrides.enable_sha256_verify.is_some(),
         overrides.etag_validation_timeout_secs.is_some(),
+        overrides.chunk_retries.is_some(),
     ]) {
         patch.storage = Some(StoragePatch {
             backend: overrides.storage_backend,
@@ -510,6 +522,7 @@ fn cli_patch(overrides: CliOverrides) -> anyhow::Result<ConfigPatch> {
             prefetch_budget_base: overrides.prefetch_budget_base,
             verify_sha256: overrides.enable_sha256_verify,
             etag_validation_timeout_secs: overrides.etag_validation_timeout_secs,
+            chunk_retries: overrides.chunk_retries,
         });
     }
 
@@ -590,6 +603,7 @@ fn env_patch() -> anyhow::Result<ConfigPatch> {
         prefetch_budget_base: env_parsed("HUGRS_PREFETCH_BUDGET_BASE")?,
         verify_sha256: env_parsed("HUGRS_VERIFY_SHA256")?,
         etag_validation_timeout_secs: env_parsed("HUGRS_ETAG_VALIDATION_TIMEOUT")?,
+        chunk_retries: env_parsed("HUGRS_CHUNK_RETRIES")?,
     };
     if !storage_is_empty(&storage) {
         patch.storage = Some(storage);
@@ -684,6 +698,8 @@ fn storage_is_empty(value: &StoragePatch) -> bool {
         value.prefetch_depth.is_some(),
         value.prefetch_budget_base.is_some(),
         value.verify_sha256.is_some(),
+        value.etag_validation_timeout_secs.is_some(),
+        value.chunk_retries.is_some(),
     ])
 }
 

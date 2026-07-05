@@ -62,6 +62,7 @@ struct ChunkReader {
     event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
     fetched_bytes: Arc<AtomicU64>,
     verify_sha256: bool,
+    chunk_retries: u32,
     write_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
@@ -77,6 +78,7 @@ impl SessionTable {
         event_tx: mpsc::UnboundedSender<ChunkStoredEvent>,
         fetched_bytes: Arc<AtomicU64>,
         verify_sha256: bool,
+        chunk_retries: u32,
     ) -> Self {
         Self {
             map: Arc::new(DashMap::new()),
@@ -86,6 +88,7 @@ impl SessionTable {
                 event_tx,
                 fetched_bytes,
                 verify_sha256,
+                chunk_retries,
                 write_locks: DashMap::new(),
             }),
         }
@@ -231,100 +234,149 @@ impl ChunkReader {
         cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
     ) -> anyhow::Result<Bytes> {
         let range_header = format!("bytes={start}-{end}");
-        let mut req = self.http_client.get(&url).header("Range", &range_header);
-        if let Some(ref ua) = user_agent {
-            req = req.header("User-Agent", ua);
-        }
-        let response = req
-            .send()
+        let max_retries = self.chunk_retries.max(1);
+
+        let mut attempt: u32 = 0;
+        loop {
+            attempt += 1;
+            let mut req = self.http_client.get(&url).header("Range", &range_header);
+            if let Some(ref ua) = user_agent {
+                req = req.header("User-Agent", ua);
+            }
+
+            let response = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if attempt >= max_retries {
+                        return Err(anyhow::anyhow!(
+                            "chunk {chunk_idx} request error after {attempt} attempts: {e}"
+                        ));
+                    }
+                    tracing::warn!(
+                        "chunk {chunk_idx} request attempt {attempt} failed: {e}, retrying..."
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
+                    continue;
+                }
+            };
+
+            let status = response.status();
+
+            if status.is_server_error() {
+                if attempt >= max_retries {
+                    return Err(anyhow::anyhow!(
+                        "chunk {chunk_idx} server error {status} after {attempt} attempts"
+                    ));
+                }
+                tracing::warn!(
+                    "chunk {chunk_idx} server returned {status} on attempt {attempt}, retrying..."
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                continue;
+            }
+
+            let full_data = match response
+                .error_for_status()
+                .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?
+                .bytes()
+                .await
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    if attempt >= max_retries {
+                        return Err(anyhow::anyhow!(
+                            "chunk {chunk_idx} download error after {attempt} attempts: {e}"
+                        ));
+                    }
+                    tracing::warn!(
+                        "chunk {chunk_idx} download attempt {attempt} failed: {e}, retrying..."
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64))
+                        .await;
+                    continue;
+                }
+            };
+
+            let expected_len = (end - start + 1) as usize;
+            let data = if status == reqwest::StatusCode::OK && full_data.len() > expected_len {
+                let offset = start as usize;
+                let slice_end = (end + 1) as usize;
+                let slice_end = slice_end.min(full_data.len());
+                full_data.slice(offset..slice_end)
+            } else if full_data.len() != expected_len {
+                anyhow::bail!(
+                    "chunk {chunk_idx} download incomplete: expected {} bytes, got {}",
+                    expected_len,
+                    full_data.len()
+                );
+            } else {
+                full_data
+            };
+
+            self.fetched_bytes
+                .fetch_add(data.len() as u64, Ordering::Relaxed);
+
+            let (sha256, data) = tokio::task::spawn_blocking(move || {
+                let h = chunker::sha256_hex(&data);
+                (h, data)
+            })
             .await
-            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?;
-        let status = response.status();
-        let full_data = response
-            .error_for_status()
-            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} request error: {e}"))?
-            .bytes()
-            .await
-            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} download error: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} sha256 panicked: {e}"))?;
 
-        let expected_len = (end - start + 1) as usize;
-        let data = if status == reqwest::StatusCode::OK && full_data.len() > expected_len {
-            let offset = start as usize;
-            let slice_end = (end + 1) as usize;
-            let slice_end = slice_end.min(full_data.len());
-            full_data.slice(offset..slice_end)
-        } else if full_data.len() != expected_len {
-            anyhow::bail!(
-                "chunk {chunk_idx} download incomplete: expected {} bytes, got {}",
-                expected_len,
-                full_data.len()
-            );
-        } else {
-            full_data
-        };
+            let expected_sha = cached_chunks
+                .lock_or_recover()
+                .get(&(chunk_idx as usize))
+                .cloned();
+            if self.verify_sha256
+                && expected_sha
+                    .as_ref()
+                    .map(|expected| expected != &sha256)
+                    .unwrap_or(false)
+            {
+                anyhow::bail!(
+                    "checksum mismatch for chunk {}: expected {} got {}",
+                    chunk_idx,
+                    expected_sha.unwrap_or_default(),
+                    sha256
+                );
+            }
 
-        self.fetched_bytes
-            .fetch_add(data.len() as u64, Ordering::Relaxed);
+            let lock = self
+                .write_locks
+                .entry(sha256.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone();
+            let _guard = lock.lock().await;
+            let stored_size: i64 = if !self.backend.exists(&sha256).await.unwrap_or(false) {
+                self.backend.put(&sha256, &data).await? as i64
+            } else {
+                data.len() as i64
+            };
 
-        let (sha256, data) = tokio::task::spawn_blocking(move || {
-            let h = chunker::sha256_hex(&data);
-            (h, data)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("chunk {chunk_idx} sha256 panicked: {e}"))?;
-
-        let expected_sha = cached_chunks
-            .lock_or_recover()
-            .get(&(chunk_idx as usize))
-            .cloned();
-        if self.verify_sha256
-            && expected_sha
-                .as_ref()
-                .map(|expected| expected != &sha256)
-                .unwrap_or(false)
-        {
-            anyhow::bail!(
-                "checksum mismatch for chunk {}: expected {} got {}",
+            let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
+            cached_chunks
+                .lock_or_recover()
+                .insert(chunk_idx as usize, sha256.clone());
+            let _ = self.event_tx.send(ChunkStoredEvent {
+                sha256: sha256.clone(),
+                path,
+                data_len: data.len() as i64,
+                stored_size,
+                file_id,
                 chunk_idx,
-                expected_sha.unwrap_or_default(),
-                sha256
+            });
+
+            tracing::info!(
+                "[f{}] chunk {}/{} done ({} bytes)",
+                file_id,
+                chunk_idx + 1,
+                chunk_count,
+                data.len()
             );
+
+            return Ok(data);
         }
-
-        let lock = self
-            .write_locks
-            .entry(sha256.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone();
-        let _guard = lock.lock().await;
-        let stored_size: i64 = if !self.backend.exists(&sha256).await.unwrap_or(false) {
-            self.backend.put(&sha256, &data).await? as i64
-        } else {
-            data.len() as i64
-        };
-
-        let path = format!("{}/{}/{}", &sha256[0..2], &sha256[2..4], sha256);
-        cached_chunks
-            .lock_or_recover()
-            .insert(chunk_idx as usize, sha256.clone());
-        let _ = self.event_tx.send(ChunkStoredEvent {
-            sha256: sha256.clone(),
-            path,
-            data_len: data.len() as i64,
-            stored_size,
-            file_id,
-            chunk_idx,
-        });
-
-        tracing::info!(
-            "[f{}] chunk {}/{} done ({} bytes)",
-            file_id,
-            chunk_idx + 1,
-            chunk_count,
-            data.len()
-        );
-
-        Ok(data)
     }
 }
 
@@ -815,6 +867,7 @@ mod tests {
             event_tx,
             Arc::new(AtomicU64::new(0)),
             true,
+            3,
         ));
         // stash mailbox_tx so the channel stays open
         std::mem::forget(mailbox_tx);
@@ -980,5 +1033,220 @@ mod tests {
         actor.forward_chunk(0, &chunk_data).await;
 
         assert!(rx.try_recv().is_err());
+    }
+
+    // ── fetch_chunk retry tests ──────────────────────────────
+
+    use super::ChunkReader;
+    use axum::{extract::State, http::StatusCode, response::Response, routing::get, Router};
+    use dashmap::DashMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[derive(Clone)]
+    struct RetryTestServer {
+        attempt: Arc<AtomicU32>,
+        fail_count: u32,
+        data: Arc<Vec<u8>>,
+    }
+
+    async fn retry_handler(
+        State(state): State<RetryTestServer>,
+    ) -> Result<Response<axum::body::Body>, (StatusCode, String)> {
+        let prev = state.attempt.fetch_add(1, Ordering::SeqCst);
+        if prev < state.fail_count {
+            return Ok(Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(axum::body::Body::empty())
+                .unwrap());
+        }
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/octet-stream")
+            .body(axum::body::Body::from(state.data.as_ref().clone()))
+            .unwrap())
+    }
+
+    async fn retry_handler_403(
+        State(state): State<RetryTestServer>,
+    ) -> Result<Response<axum::body::Body>, (StatusCode, String)> {
+        state.attempt.fetch_add(1, Ordering::SeqCst);
+        Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(axum::body::Body::empty())
+            .unwrap())
+    }
+
+    fn chunk_reader(dir: &TempDir, chunk_retries: u32) -> ChunkReader {
+        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let backend: Arc<dyn StorageBackend> = Arc::new(crate::storage::local::LocalBackend::new(
+            dir.path().join("chunks"),
+            crate::storage::Compression::None,
+        ));
+        ChunkReader {
+            http_client: reqwest::Client::new(),
+            backend,
+            event_tx,
+            fetched_bytes: Arc::new(AtomicU64::new(0)),
+            verify_sha256: false,
+            chunk_retries,
+            write_locks: DashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_chunk_retries_on_5xx_then_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
+        let data_len = test_data.len() as u64;
+
+        let server = RetryTestServer {
+            attempt: Arc::new(AtomicU32::new(0)),
+            fail_count: 2,
+            data: Arc::new(test_data.clone()),
+        };
+        let attempt_counter = server.attempt.clone();
+
+        let app = Router::new()
+            .route("/test", get(retry_handler))
+            .with_state(server);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let reader = chunk_reader(&dir, 3);
+        let url = format!("http://{addr}/test");
+        let result = reader
+            .fetch_chunk(
+                url,
+                1,
+                0,
+                0,
+                data_len - 1,
+                data_len,
+                1,
+                None,
+                Arc::new(StdMutex::new(HashMap::new())),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "expected success after retries, got: {result:?}"
+        );
+        assert_eq!(
+            result.unwrap().as_ref(),
+            test_data.as_slice(),
+            "downloaded data should match"
+        );
+        assert_eq!(
+            attempt_counter.load(Ordering::SeqCst),
+            3,
+            "expected 3 attempts (2 failures + 1 success)"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_chunk_fails_after_max_retries_exhausted() {
+        let dir = TempDir::new().unwrap();
+        let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
+        let data_len = test_data.len() as u64;
+
+        let server = RetryTestServer {
+            attempt: Arc::new(AtomicU32::new(0)),
+            fail_count: 10,
+            data: Arc::new(test_data.clone()),
+        };
+        let attempt_counter = server.attempt.clone();
+
+        let app = Router::new()
+            .route("/test", get(retry_handler))
+            .with_state(server);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let reader = chunk_reader(&dir, 3);
+        let url = format!("http://{addr}/test");
+        let result = reader
+            .fetch_chunk(
+                url,
+                1,
+                0,
+                0,
+                data_len - 1,
+                data_len,
+                1,
+                None,
+                Arc::new(StdMutex::new(HashMap::new())),
+            )
+            .await;
+
+        assert!(result.is_err(), "expected failure after max retries");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("after 3 attempts"),
+            "error should mention attempt count, got: {err_msg}"
+        );
+        assert_eq!(
+            attempt_counter.load(Ordering::SeqCst),
+            3,
+            "expected exactly 3 attempts"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_chunk_does_not_retry_on_4xx() {
+        let dir = TempDir::new().unwrap();
+        let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
+        let data_len = test_data.len() as u64;
+
+        let server = RetryTestServer {
+            attempt: Arc::new(AtomicU32::new(0)),
+            fail_count: 0,
+            data: Arc::new(test_data.clone()),
+        };
+        let attempt_counter = server.attempt.clone();
+
+        let app = Router::new()
+            .route("/test", get(retry_handler_403))
+            .with_state(server);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let reader = chunk_reader(&dir, 3);
+        let url = format!("http://{addr}/test");
+        let result = reader
+            .fetch_chunk(
+                url,
+                1,
+                0,
+                0,
+                data_len - 1,
+                data_len,
+                1,
+                None,
+                Arc::new(StdMutex::new(HashMap::new())),
+            )
+            .await;
+
+        assert!(result.is_err(), "4xx should fail immediately");
+        assert_eq!(
+            attempt_counter.load(Ordering::SeqCst),
+            1,
+            "4xx should not be retried"
+        );
     }
 }

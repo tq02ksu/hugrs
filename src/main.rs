@@ -88,6 +88,7 @@ fn main() -> anyhow::Result<()> {
             config.storage.verify_sha256,
             stream_client,
             config.storage.etag_validation_timeout_secs,
+            config.storage.chunk_retries,
         );
 
         // TRANSITIONAL: remove in v0.X.0 ──────────────────────────

@@ -123,6 +123,7 @@ async fn test_multiple_gets_no_duplicate_downloads() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     ));
 
     let upstream_url = format!("http://{addr}/test/repo/resolve/main/no-dup.bin");
@@ -231,6 +232,7 @@ async fn test_partial_cache_no_redundant_download() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     ));
 
     let upstream_url = format!("http://{addr}/test/repo/resolve/main/partial.bin");
@@ -337,6 +339,7 @@ async fn test_retry_after_client_disconnect_restarts_incomplete_session() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     ));
 
     let upstream_url = format!("http://{addr}/test/repo/resolve/main/retry.bin");
@@ -505,6 +508,7 @@ async fn test_corrupt_cached_large_chunk_refetches_from_upstream() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     ));
 
     let upstream_url = format!("http://{addr}/test/repo/resolve/main/repair-large.bin");
@@ -648,6 +652,7 @@ async fn test_corrupt_cached_small_file_refetches_from_upstream() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     ));
 
     let upstream_url = format!("http://{addr}/test/repo/resolve/main/repair-small.bin");
@@ -782,6 +787,7 @@ async fn test_corrupt_cached_chunk_returns_error_when_upstream_unavailable() {
         true,
         reqwest::Client::new(),
         5,
+        3,
     ));
 
     let upstream_url = format!("http://{addr}/test/repo/resolve/main/repair-fail.bin");
