@@ -38,10 +38,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: >
           cargo bench --bench retry --
-          sha256
-          storage_write
-          storage_concurrent_read
-          storage_concurrent_write
+          "sha256|storage"
           --baseline master
           --verbose
           || echo "::warning::Benchmark regression detected — review above"
@@ -50,10 +47,7 @@ jobs:
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: >
           cargo bench --bench retry --
-          sha256
-          storage_write
-          storage_concurrent_read
-          storage_concurrent_write
+          "sha256|storage"
           --save-baseline master
           --verbose
 
