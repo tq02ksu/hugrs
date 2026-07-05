@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0] - 2026-07-05
+
+### Changed
+- Removed the server-wide `Mutex<CacheService>` bottleneck so request handling can use the shared service directly
+- Reworked cache-hit and metadata probe flow to avoid redundant upstream checks and reuse complete-file metadata
+- Refactored GC, eviction, and session download paths around batched cleanup and incomplete-download backpressure
+
+### Fixed
+- Handle upstream `200 OK` full-file responses when `Range` is ignored by slicing and caching only the requested chunk
+- Clear stale in-memory `cached_chunks` entries after corruption detection so chunk re-fetch can recover cleanly
+
+### Docs
+- Added repository status and distribution badges to `README.md` and `README_zh.md`
+- Documented the HuggingFace full-file-on-range edge case in `docs/protocol/huggingface.md`
+
 ## [0.6.1] - 2026-07-04
 
 ### Added
