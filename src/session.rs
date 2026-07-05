@@ -305,11 +305,21 @@ impl ChunkReader {
                 let slice_end = slice_end.min(full_data.len());
                 full_data.slice(offset..slice_end)
             } else if full_data.len() != expected_len {
-                anyhow::bail!(
-                    "chunk {chunk_idx} download incomplete: expected {} bytes, got {}",
-                    expected_len,
+                if attempt >= max_retries {
+                    anyhow::bail!(
+                        "chunk {chunk_idx} download incomplete after \
+                         {attempt} attempts: expected {expected_len} bytes, \
+                         got {}",
+                        full_data.len()
+                    );
+                }
+                tracing::warn!(
+                    "chunk {chunk_idx} download attempt {attempt} incomplete: \
+                     expected {expected_len} bytes, got {}, retrying...",
                     full_data.len()
                 );
+                tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+                continue;
             } else {
                 full_data
             };
@@ -1190,6 +1200,134 @@ mod tests {
             .await;
 
         assert!(result.is_err(), "expected failure after max retries");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("after 3 attempts"),
+            "error should mention attempt count, got: {err_msg}"
+        );
+        assert_eq!(
+            attempt_counter.load(Ordering::SeqCst),
+            3,
+            "expected exactly 3 attempts"
+        );
+    }
+
+    async fn retry_handler_length_mismatch(
+        State(state): State<RetryTestServer>,
+    ) -> Result<Response<axum::body::Body>, (StatusCode, String)> {
+        let prev = state.attempt.fetch_add(1, Ordering::SeqCst);
+        if prev < state.fail_count {
+            return Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(axum::body::Body::from("short"))
+                .unwrap());
+        }
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::from(state.data.as_ref().clone()))
+            .unwrap())
+    }
+
+    #[tokio::test]
+    async fn fetch_chunk_retries_on_length_mismatch_then_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
+        let data_len = test_data.len() as u64;
+
+        let server = RetryTestServer {
+            attempt: Arc::new(AtomicU32::new(0)),
+            fail_count: 2,
+            data: Arc::new(test_data.clone()),
+        };
+        let attempt_counter = server.attempt.clone();
+
+        let app = Router::new()
+            .route("/test", get(retry_handler_length_mismatch))
+            .with_state(server);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let reader = chunk_reader(&dir, 3);
+        let url = format!("http://{addr}/test");
+        let result = reader
+            .fetch_chunk(
+                url,
+                1,
+                0,
+                0,
+                data_len - 1,
+                data_len,
+                1,
+                None,
+                Arc::new(StdMutex::new(HashMap::new())),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "expected success after retries on length mismatch, got: {result:?}"
+        );
+        assert_eq!(
+            result.unwrap().as_ref(),
+            test_data.as_slice(),
+            "downloaded data should match"
+        );
+        assert_eq!(
+            attempt_counter.load(Ordering::SeqCst),
+            3,
+            "expected 3 attempts (2 length mismatches + 1 success)"
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_chunk_fails_after_length_mismatch_exhausted() {
+        let dir = TempDir::new().unwrap();
+        let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
+        let data_len = test_data.len() as u64;
+
+        let server = RetryTestServer {
+            attempt: Arc::new(AtomicU32::new(0)),
+            fail_count: 10,
+            data: Arc::new(test_data.clone()),
+        };
+        let attempt_counter = server.attempt.clone();
+
+        let app = Router::new()
+            .route("/test", get(retry_handler_length_mismatch))
+            .with_state(server);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let reader = chunk_reader(&dir, 3);
+        let url = format!("http://{addr}/test");
+        let result = reader
+            .fetch_chunk(
+                url,
+                1,
+                0,
+                0,
+                data_len - 1,
+                data_len,
+                1,
+                None,
+                Arc::new(StdMutex::new(HashMap::new())),
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "expected failure after max retries on length mismatch"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("after 3 attempts"),
