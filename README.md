@@ -42,6 +42,9 @@ docker run -p 3000:3000 \
 ```bash
 brew tap tq02ksu/tap
 brew install tq02ksu/tap/hugrs
+
+# rollback to 0.6.1
+brew install tq02ksu/tap/hugrs@0.6.1
 ```
 
 ## Quick Start
