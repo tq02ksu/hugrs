@@ -3,7 +3,6 @@ use hugrs::storage::Compression;
 use hugrs::storage::StorageBackend;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::task::JoinSet;
 
 #[tokio::test]
 async fn test_local_put_and_get() {
