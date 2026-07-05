@@ -8,8 +8,12 @@
 - Refactored GC, eviction, and session download paths around batched cleanup and incomplete-download backpressure
 
 ### Fixed
+- Re-implemented `FileSessionActor` with sequential chunk downloads to restore in-order delivery and correct prefetch promotion
 - Handle upstream `200 OK` full-file responses when `Range` is ignored by slicing and caching only the requested chunk
 - Clear stale in-memory `cached_chunks` entries after corruption detection so chunk re-fetch can recover cleanly
+
+### CI
+- Extended the Clippy quality gate to lint test targets as well
 
 ### Docs
 - Added repository status and distribution badges to `README.md` and `README_zh.md`
