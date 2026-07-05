@@ -662,7 +662,10 @@ impl FileSessionActor {
 
         for cursor in cursors {
             for j in (cursor + 1)..(cursor + 1 + per_cursor).min(self.chunk_count) {
-                if self.completed.contains(&j) || self.prefetch_inflight.contains(&j) {
+                if self.completed.contains(&j) || self.prefetch_inflight.contains(&j) || {
+                    let cc = self.cached_chunks.lock_or_recover();
+                    cc.contains_key(&j)
+                } {
                     continue;
                 }
                 self.prefetch_inflight.insert(j);
@@ -853,7 +856,7 @@ impl FileSessionManager {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
-    use super::{prefetch_budget, FileSessionActor, SessionTable, CHUNK_SIZE};
+    use super::{prefetch_budget, FileSessionActor, LockExt, SessionTable, CHUNK_SIZE};
     use crate::storage::StorageBackend;
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicU64;
@@ -1007,6 +1010,60 @@ mod tests {
         actor.prefetch_inflight.insert(0);
         let cursors = actor.compute_active_cursors();
         assert_eq!(cursors, vec![1]);
+    }
+
+    // ── schedule_prefetches ────────────────────────────────────
+
+    #[tokio::test]
+    async fn schedule_prefetches_skips_already_cached_chunks() {
+        let mut actor = test_actor();
+        actor.chunk_count = 20;
+
+        // Seed cached_chunks — simulate chunks 1,2,3 already downloaded
+        {
+            let mut cc = actor.cached_chunks.lock_or_recover();
+            cc.insert(1, "abc123".into());
+            cc.insert(2, "def456".into());
+            cc.insert(3, "ghi789".into());
+        }
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(32);
+        actor.subscribers.push((0, 19 * CHUNK_SIZE as u64 - 1, tx));
+
+        actor.schedule_prefetches();
+
+        // Cached chunks must NOT be scheduled for prefetch
+        assert!(!actor.prefetch_inflight.contains(&1));
+        assert!(!actor.prefetch_inflight.contains(&2));
+        assert!(!actor.prefetch_inflight.contains(&3));
+
+        // Non-cached chunks after the cursor must still be scheduled
+        assert!(actor.prefetch_inflight.contains(&4));
+        assert!(actor.prefetch_inflight.contains(&5));
+    }
+
+    #[tokio::test]
+    async fn schedule_prefetches_all_cached_is_noop() {
+        let mut actor = test_actor();
+        actor.chunk_count = 10;
+
+        // All chunks are cached
+        {
+            let mut cc = actor.cached_chunks.lock_or_recover();
+            for i in 0..10 {
+                cc.insert(i, format!("sha{i}"));
+            }
+        }
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(32);
+        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
+
+        actor.schedule_prefetches();
+
+        assert!(
+            actor.prefetch_inflight.is_empty(),
+            "no chunks should be prefetched when all are cached"
+        );
     }
 
     // ── forward_chunk ─────────────────────────────────────────
