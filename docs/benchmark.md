@@ -1,75 +1,59 @@
-# Benchmark
+# Benchmark Results
 
-## 测试环境
+Environment: GitHub Actions `ubuntu-latest` runner (2 vCPU, 7 GB RAM, SSD).
 
-| 项目 | 说明 |
-|------|------|
-| 操作系统 | Debian 13 |
-| CPU | Intel Core i5-7500 @ 3.40GHz |
-| 内存 | — |
-| 磁盘 | — |
-| HugRS 版本 | `main` 分支 |
-| 上游 | `hf-mirror.com` |
+## SHA256 Hashing
 
-## 测试配置
+| Input Size | Time    | Throughput |
+|------------|---------|------------|
+| 1 MB       | 4.75 ms | 211 MiB/s  |
+| 4 MB       | 18.97 ms| 211 MiB/s  |
+| 16 MB      | 75.9 ms | 211 MiB/s  |
 
-| 配置项 | 值 |
-|--------|-----|
-| `prefetch_depth` | 4 |
-| `verify_sha256` | `true`（开启读时校验） |
-| `compression` | `zstd`（默认） |
+Throughput is consistent across sizes. Hashing a typical 4 MB chunk takes ~19 ms.
 
-## 测试模型
+## Storage I/O (Local Backend, No Compression)
 
-**Qwen/Qwen3-Embedding-0.6B** — 12 个文件，总计 1.21 GB。
+### Sequential Write
 
-| 文件 | 大小 |
-|------|------|
-| model.safetensors | 1.20 GB (286 chunks × 4MB) |
-| tokenizer.json | 11 MB |
-| vocab.json | 2.7 MB |
-| merges.txt | 1.7 MB |
-| 其他 8 个小文件 | <50 KB |
+| Scenario           | Time    | Throughput  |
+|--------------------|---------|-------------|
+| 4 MB new chunk     | 2.58 ms | 1.5 GiB/s   |
+| 4 MB dedup hit     | 10.3 µs | 379 GiB/s   |
 
-## 测试结果
+Dedup (exists-only) is ~250× faster than full write.
 
-### 缓存命中下载（i5-7500）
+### Concurrent Write (4 MB per task)
 
-```
-Download complete: 1.21G/1.21G [00:21<00:00, 61.3MB/s]
-```
+| Tasks | Batch Time | Throughput (per batch) |
+|-------|------------|------------------------|
+| 4     | 7.84 ms    | 510 MiB/s              |
+| 16    | 29.96 ms   | 133 MiB/s              |
+| 64    | 123.89 ms  | 32 MiB/s               |
 
-- 总耗时：**21 秒**
-- 平均速度：**~57 MB/s**
-- 大文件 `model.safetensors` 速度：**61.3 MB/s**
+Write throughput degrades under high concurrency due to disk contention.
 
-### 文件完整性验证
+### Concurrent Read (1 MB per task)
 
-```
-$ diff -qr models--Qwen--Qwen3-Embedding-0.6B ~/.cache/huggingface/hub/models--Qwen--Qwen3-Embedding-0.6B/
-```
+| Tasks | Batch Time | Throughput (per batch) |
+|-------|------------|------------------------|
+| 4     | 397 µs     | 2.5 GiB/s              |
+| 16    | 1.39 ms    | 717 MiB/s              |
+| 64    | 4.56 ms    | 219 MiB/s              |
 
-**输出为空** — 所有 12 个文件字节级一致，零差异。
+Read throughput is significantly higher than write and scales better with concurrency.
 
-### 缓存命中下载（24核 E5-2620 服务器）
+## How to Run
 
-```
-Creating pointer from blobs/0437e45c... to snapshots/97b0c614...
-Fetching 12 files: 100%|...| 12/12 [00:04<00:00, 2.47it/s]
-Download complete: 100%|...| 1.21G/1.21G [00:04<00:00, 518MB/s]
-Download complete: 100%|...| 1.21G/1.21G [00:04<00:00, 245MB/s]
+```bash
+# All benchmarks
+cargo bench --bench retry
+
+# Specific group
+cargo bench --bench retry -- sha256
+cargo bench --bench retry -- storage_write
+cargo bench --bench retry -- storage_concurrent_read
+cargo bench --bench retry -- storage_concurrent_write
 ```
 
-| 指标 | 数值 |
-|------|------|
-| 服务器 CPU | Intel Xeon E5-2620 × 2（24核） |
-| 总耗时 | **~8 秒**（metadata 4s + download 4s） |
-| 峰值下载速度 | **518 MB/s**（纯数据传输阶段） |
-| 整体下载速度 | **~245 MB/s**（含 metadata fetch 等开销） |
-| 对比 i5-7500 | **8.5× 提速**（vs i5-7500 的 61 MB/s） |
-
-## 说明
-
-- 缓存命中时 i5-7500 达到 ~61 MB/s，E5-2620 服务器达到 518 MB/s（峰值），均受本地 IO 限制
-- 预读深度 4 + 开启 SHA256 校验时，读磁盘验 hash 与 TCP 发送并行，未成为瓶颈
-- 文件完整性验证通过，代理转发的数据与直接从镜像站下载完全一致
+CI automatically runs these on every PR and push to master, comparing against the stored baseline.
