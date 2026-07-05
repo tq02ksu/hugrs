@@ -1055,13 +1055,13 @@ mod tests {
         let prev = state.attempt.fetch_add(1, Ordering::SeqCst);
         if prev < state.fail_count {
             return Ok(Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .body(axum::body::Body::empty())
+                .status(StatusCode::OK)
+                .header("content-length", "999999")
+                .body(axum::body::Body::from("short"))
                 .unwrap());
         }
         Ok(Response::builder()
             .status(StatusCode::OK)
-            .header("Content-Type", "application/octet-stream")
             .body(axum::body::Body::from(state.data.as_ref().clone()))
             .unwrap())
     }
@@ -1094,7 +1094,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_chunk_retries_on_5xx_then_succeeds() {
+    async fn fetch_chunk_retries_on_body_read_error_then_succeeds() {
         let dir = TempDir::new().unwrap();
         let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
         let data_len = test_data.len() as u64;
@@ -1150,7 +1150,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_chunk_fails_after_max_retries_exhausted() {
+    async fn fetch_chunk_fails_after_body_read_errors_exhausted() {
         let dir = TempDir::new().unwrap();
         let test_data: Vec<u8> = (0..100).map(|i| i as u8).collect();
         let data_len = test_data.len() as u64;

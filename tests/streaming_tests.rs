@@ -438,7 +438,7 @@ async fn repair_get(
         (0u64, total - 1)
     };
 
-    if state.fail_ranges.lock().unwrap().remove(&(start, end)) {
+    if state.fail_ranges.lock().unwrap().contains(&(start, end)) {
         return Err((StatusCode::BAD_GATEWAY, "upstream unavailable".to_string()));
     }
 
