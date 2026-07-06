@@ -45,7 +45,7 @@ rusqlite_migration = "2"
 figment = { version = "0.10", features = ["env", "toml", "test"] }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 tokio-test = "0.4"
 tower = "0.5"
 tempfile = "3"
