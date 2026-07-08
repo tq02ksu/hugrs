@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::control::{
     AuthInfo, CacheInfo, DeleteResponse, FileListItem, FileListResponse, FileShowResponse,
-    GcPreviewResponse, GcRequest, GcResultResponse, ReconsileRequest, ReconsileResponse,
+    GcPreviewResponse, GcRequest, GcResultResponse, ReconcileRequest, ReconcileResponse,
     RepoListItem, RepoListResponse, RepoShowResponse, ServiceStatsResponse, ServiceStatusResponse,
     SourceInfo, SourcesInfo,
 };
@@ -163,7 +163,7 @@ pub fn app_router(app_state: AppState) -> Router {
         .route("/_hugrs/service", get(control_service_status))
         .route("/_hugrs/service/stats", get(control_service_stats))
         .route("/_hugrs/service/gc", post(control_service_gc))
-        .route("/_hugrs/service/reconsile", post(control_service_reconsile))
+        .route("/_hugrs/service/reconcile", post(control_service_reconcile))
         .route("/_hugrs/repos", get(control_repos_list))
         .route(
             "/_hugrs/repos/{*repo}",
@@ -1067,17 +1067,17 @@ async fn control_service_gc(
     }
 }
 
-async fn control_service_reconsile(
+async fn control_service_reconcile(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<ReconsileRequest>,
-) -> Result<Json<ReconsileResponse>, AppError> {
+    Json(req): Json<ReconcileRequest>,
+) -> Result<Json<ReconcileResponse>, AppError> {
     require_admin(&headers, &state)?;
     let result = state
         .service
-        .reconsile_chunk_refs(req.dry_run)
+        .reconcile_chunk_refs(req.dry_run)
         .map_err(AppError::Anyhow)?;
-    Ok(Json(ReconsileResponse {
+    Ok(Json(ReconcileResponse {
         scanned_chunks: result.scanned_chunks,
         mismatched_chunks: result.mismatched_chunks,
         refcount_fixed: result.refcount_fixed,

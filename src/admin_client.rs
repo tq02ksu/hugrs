@@ -1,7 +1,7 @@
 use crate::config::default_admin_token_file_path;
 use crate::control::{
     DeleteResponse, FileListResponse, FileShowResponse, GcPreviewResponse, GcRequest,
-    GcResultResponse, ReconsileRequest, ReconsileResponse, RepoListResponse, RepoShowResponse,
+    GcResultResponse, ReconcileRequest, ReconcileResponse, RepoListResponse, RepoShowResponse,
     ServiceStatsResponse, ServiceStatusResponse,
 };
 use std::path::PathBuf;
@@ -73,18 +73,18 @@ impl AdminClient {
         .await
     }
 
-    pub async fn service_reconsile_dry_run(&self) -> anyhow::Result<ReconsileResponse> {
+    pub async fn service_reconcile_dry_run(&self) -> anyhow::Result<ReconcileResponse> {
         self.post(
-            "/_hugrs/service/reconsile",
-            &ReconsileRequest { dry_run: true },
+            "/_hugrs/service/reconcile",
+            &ReconcileRequest { dry_run: true },
         )
         .await
     }
 
-    pub async fn service_reconsile_apply(&self) -> anyhow::Result<ReconsileResponse> {
+    pub async fn service_reconcile_apply(&self) -> anyhow::Result<ReconcileResponse> {
         self.post(
-            "/_hugrs/service/reconsile",
-            &ReconsileRequest { dry_run: false },
+            "/_hugrs/service/reconcile",
+            &ReconcileRequest { dry_run: false },
         )
         .await
     }

@@ -1160,7 +1160,7 @@ async fn test_control_api_returns_service_status() {
 }
 
 #[tokio::test]
-async fn test_control_api_reconsile_dry_run_reports_summary() {
+async fn test_control_api_reconcile_dry_run_reports_summary() {
     let (upstream, _s) = start_upstream(b"{}".to_vec()).await;
     let dir = TempDir::new().unwrap();
     let app = build_hugrs_router(&upstream, &dir);
@@ -1168,7 +1168,7 @@ async fn test_control_api_reconsile_dry_run_reports_summary() {
     use tower::util::ServiceExt;
     let req = axum::http::Request::builder()
         .method("POST")
-        .uri("/_hugrs/service/reconsile")
+        .uri("/_hugrs/service/reconcile")
         .header("Authorization", "Bearer test-admin-token")
         .header("Content-Type", "application/json")
         .body(axum::body::Body::from(r#"{"dry_run":true}"#))

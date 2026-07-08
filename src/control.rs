@@ -132,12 +132,12 @@ pub struct GcResultResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReconsileRequest {
+pub struct ReconcileRequest {
     pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReconsileResponse {
+pub struct ReconcileResponse {
     pub scanned_chunks: usize,
     pub mismatched_chunks: usize,
     pub refcount_fixed: usize,

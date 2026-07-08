@@ -266,11 +266,11 @@ impl CacheService {
         })
     }
 
-    pub fn reconsile_chunk_refs(
+    pub fn reconcile_chunk_refs(
         &self,
         dry_run: bool,
-    ) -> anyhow::Result<crate::metadata::ReconsileChunkRefsResult> {
-        self.metadata.reconsile_chunk_refs(dry_run)
+    ) -> anyhow::Result<crate::metadata::ReconcileChunkRefsResult> {
+        self.metadata.reconcile_chunk_refs(dry_run)
     }
 
     pub async fn gc_execute_batch(&self, batch_size: usize) -> anyhow::Result<GcResult> {

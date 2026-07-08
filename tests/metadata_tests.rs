@@ -190,7 +190,7 @@ fn test_stats_ignores_orphan_chunks() {
 }
 
 #[test]
-fn test_reconsile_chunk_refs_dry_run_reports_without_mutating() {
+fn test_reconcile_chunk_refs_dry_run_reports_without_mutating() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let store = MetadataStore::new(&db_path).unwrap();
@@ -207,7 +207,7 @@ fn test_reconsile_chunk_refs_dry_run_reports_without_mutating() {
             .unwrap();
     }
 
-    let result = store.reconsile_chunk_refs(true).unwrap();
+    let result = store.reconcile_chunk_refs(true).unwrap();
     assert_eq!(result.scanned_chunks, 1);
     assert_eq!(result.mismatched_chunks, 1);
     assert_eq!(result.refcount_fixed, 1);
@@ -217,7 +217,7 @@ fn test_reconsile_chunk_refs_dry_run_reports_without_mutating() {
 }
 
 #[test]
-fn test_reconsile_chunk_refs_apply_repairs_refcount_and_orphan_state() {
+fn test_reconcile_chunk_refs_apply_repairs_refcount_and_orphan_state() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("test.db");
     let store = MetadataStore::new(&db_path).unwrap();
@@ -235,7 +235,7 @@ fn test_reconsile_chunk_refs_apply_repairs_refcount_and_orphan_state() {
             .unwrap();
     }
 
-    let result = store.reconsile_chunk_refs(false).unwrap();
+    let result = store.reconcile_chunk_refs(false).unwrap();
     assert_eq!(result.mismatched_chunks, 1);
     assert_eq!(result.refcount_fixed, 1);
     assert_eq!(result.orphaned_cleared, 1);

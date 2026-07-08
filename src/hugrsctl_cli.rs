@@ -1,7 +1,7 @@
 use crate::admin_client::AdminClient;
 use crate::control::{
     DeleteResponse, FileListItem, FileListResponse, FileShowResponse, GcPreviewResponse,
-    GcResultResponse, ReconsileResponse, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
+    GcResultResponse, ReconcileResponse, RepoListResponse, RepoShowResponse, ServiceStatsResponse,
     ServiceStatusResponse,
 };
 use clap::{Args, Parser, Subcommand};
@@ -48,7 +48,7 @@ pub enum ServiceCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    Reconsile {
+    Reconcile {
         #[arg(long)]
         dry_run: bool,
     },
@@ -150,13 +150,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     }
                 }
             }
-            ServiceCommand::Reconsile { dry_run } => {
+            ServiceCommand::Reconcile { dry_run } => {
                 let value = if dry_run {
-                    client.service_reconsile_dry_run().await?
+                    client.service_reconcile_dry_run().await?
                 } else {
-                    client.service_reconsile_apply().await?
+                    client.service_reconcile_apply().await?
                 };
-                print_reconsile_result(cli.json, &value);
+                print_reconcile_result(cli.json, &value);
             }
         },
         Resource::Repo(args) => match args.command.unwrap_or(ReposCommand::List) {
@@ -285,7 +285,7 @@ fn print_gc_preview(json: bool, value: &GcPreviewResponse) {
     }
 }
 
-fn print_reconsile_result(json: bool, value: &ReconsileResponse) {
+fn print_reconcile_result(json: bool, value: &ReconcileResponse) {
     if json {
         print_json(value);
         return;

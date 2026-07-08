@@ -39,7 +39,7 @@
 ## [0.6.0] - 2026-07-04
 
 ### Added
-- Reconsile repair and batched GC (`hugrsctl service reconsile` + `hugrsctl service gc`)
+- Reconcile repair and batched GC (`hugrsctl service reconcile` + `hugrsctl service gc`)
 - File download completion status reporting in `hugrsctl files show`
 - File download progress display in `hugrsctl files show`
 - Homebrew install documentation

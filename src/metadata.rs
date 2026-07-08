@@ -53,7 +53,7 @@ pub struct Stats {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ReconsileChunkRefsResult {
+pub struct ReconcileChunkRefsResult {
     pub scanned_chunks: usize,
     pub mismatched_chunks: usize,
     pub refcount_fixed: usize,
@@ -280,10 +280,10 @@ impl MetadataStore {
         Ok(file_ids.len())
     }
 
-    pub fn reconsile_chunk_refs(&self, dry_run: bool) -> anyhow::Result<ReconsileChunkRefsResult> {
+    pub fn reconcile_chunk_refs(&self, dry_run: bool) -> anyhow::Result<ReconcileChunkRefsResult> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        let mut result = ReconsileChunkRefsResult::default();
+        let mut result = ReconcileChunkRefsResult::default();
 
         let rows = {
             let mut stmt = tx.prepare(

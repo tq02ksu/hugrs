@@ -86,7 +86,7 @@ Add a new admin endpoint under `/_hugrs/service/...` for ref-count reconciliatio
 
 Recommended route:
 
-- `POST /_hugrs/service/reconsile`
+- `POST /_hugrs/service/reconcile`
 
 This endpoint should follow the same request style as current GC:
 
@@ -239,7 +239,7 @@ This avoids defining a streaming JSON protocol in this change.
 
 ### `src/server.rs`
 
-- add `/_hugrs/service/reconsile`
+- add `/_hugrs/service/reconcile`
 - update `/_hugrs/service/gc` to batch one pass per request
 
 ### `src/admin_client.rs`
@@ -251,7 +251,7 @@ This avoids defining a streaming JSON protocol in this change.
 
 - update `service gc` execute flow to loop with one-second pauses
 - add output formatting for per-batch progress and final aggregate summary
-- add CLI wiring for `hugrsctl service reconsile --dry-run|--apply` style usage
+- add CLI wiring for `hugrsctl service reconcile --dry-run|--apply` style usage
 
 ## Error Handling
 

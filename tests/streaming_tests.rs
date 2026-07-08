@@ -591,14 +591,14 @@ async fn test_corrupt_cached_large_chunk_refetches_from_upstream() {
     );
 
     // Verify chunks/file_chunks consistency after refetch
-    let refs_result = metadata.reconsile_chunk_refs(false).unwrap();
+    let refs_result = metadata.reconcile_chunk_refs(false).unwrap();
     assert_eq!(
         refs_result.mismatched_chunks, 0,
-        "reconsile must find no ref_count mismatches after corrupt+refetch"
+        "reconcile must find no ref_count mismatches after corrupt+refetch"
     );
     assert_eq!(
         refs_result.orphaned_marked, 0,
-        "reconsile must find no orphan chunks after corrupt+refetch"
+        "reconcile must find no orphan chunks after corrupt+refetch"
     );
 }
 
@@ -729,7 +729,7 @@ async fn test_corrupt_cached_small_file_refetches_from_upstream() {
         "file_chunks must reflect correct chunk_size after refetch"
     );
 
-    let refs_result = metadata.reconsile_chunk_refs(false).unwrap();
+    let refs_result = metadata.reconcile_chunk_refs(false).unwrap();
     assert_eq!(refs_result.mismatched_chunks, 0);
     assert_eq!(refs_result.orphaned_marked, 0);
 }
