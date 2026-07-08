@@ -18,11 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - language: rust
-            build-mode: manual
-          - language: actions
-            build-mode: none
+        language: [rust, actions]
     steps:
       - uses: actions/checkout@v4
 
@@ -32,15 +28,15 @@ jobs:
       - if: matrix.language == 'rust'
         uses: Swatinem/rust-cache@v2
 
+      - if: matrix.language == 'rust'
+        name: Fetch dependencies
+        run: cargo fetch --locked
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-
-      - if: matrix.language == 'rust'
-        name: Build
-        run: cargo build --all-features
+          build-mode: none
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
