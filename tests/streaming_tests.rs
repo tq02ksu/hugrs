@@ -853,3 +853,337 @@ async fn test_corrupt_cached_chunk_returns_error_when_upstream_unavailable() {
         "corrupt chunk with failed upstream refetch should error"
     );
 }
+
+#[tokio::test]
+async fn test_large_file_content_type_through_redirect() {
+    let total = CHUNK_SIZE * 2 + 123;
+    let test_data: Vec<u8> = (0..total)
+        .map(|i| (i as u8).wrapping_mul(17).wrapping_add(73))
+        .collect();
+
+    let state = MockState {
+        get_count: Arc::new(AtomicU32::new(0)),
+        head_count: Arc::new(AtomicU32::new(0)),
+        test_data: Arc::new(test_data.clone()),
+    };
+
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head(mock_redirect_head).get(mock_get),
+        )
+        .route("/cdn/{*path}", head(mock_head).get(mock_get))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+
+    let head_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let http_client = reqwest::Client::new();
+
+    let service = Arc::new(CacheService::new(
+        metadata.clone(),
+        backend.clone(),
+        None,
+        http_client,
+        head_client,
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+        5,
+        3,
+    ));
+
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/large.bin");
+
+    let (file, _content_length, stream) = service
+        .stream_from_upstream(
+            &upstream_url,
+            "large.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        file.content_type.is_some(),
+        "content_type must be captured from upstream through redirect chain, got {:?}",
+        file.content_type
+    );
+    assert_eq!(
+        file.content_type.as_deref(),
+        Some("application/octet-stream"),
+        "expected content-type from mock upstream"
+    );
+
+    use futures_util::StreamExt;
+    let mut stream = stream;
+    let mut collected = Vec::new();
+    while let Some(result) = stream.next().await {
+        collected.extend_from_slice(&result.unwrap());
+    }
+    assert_eq!(collected, test_data);
+}
+
+async fn mock_redirect_head(State(state): State<MockState>) -> Response {
+    state.head_count.fetch_add(1, Ordering::SeqCst);
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header("Location", "/cdn/large.bin")
+        .header("X-Repo-Commit", "abc123mock")
+        .header("X-Linked-Size", state.test_data.len() as i64)
+        .header("X-Linked-ETag", r#""mock-linked-etag""#)
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_large_file_content_type_in_http_response() {
+    use axum::body::Body;
+    use axum::response::Response;
+
+    let total = CHUNK_SIZE * 2 + 123;
+    let test_data: Vec<u8> = (0..total)
+        .map(|i| (i as u8).wrapping_mul(17).wrapping_add(73))
+        .collect();
+
+    let state = MockState {
+        get_count: Arc::new(AtomicU32::new(0)),
+        head_count: Arc::new(AtomicU32::new(0)),
+        test_data: Arc::new(test_data.clone()),
+    };
+
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head(mock_redirect_head).get(mock_get),
+        )
+        .route("/cdn/{*path}", head(mock_head).get(mock_get))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+
+    let head_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let http_client = reqwest::Client::new();
+
+    let service = Arc::new(CacheService::new(
+        metadata.clone(),
+        backend.clone(),
+        None,
+        http_client,
+        head_client,
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+        5,
+        3,
+    ));
+
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/large.bin");
+
+    let (file, _content_length, stream) = service
+        .stream_from_upstream(
+            &upstream_url,
+            "large.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        file.content_type.is_some(),
+        "file object must have content_type"
+    );
+
+    let body = Body::from_stream(stream);
+    let filename = std::path::Path::new("large.bin")
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("large.bin");
+    let disposition = format!("inline; filename*=UTF-8''{filename}; filename=\"{filename}\"");
+    let mut resp = Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Disposition", &disposition)
+        .header("Content-Length", file.total_size);
+    if let Some(ref ct) = file.content_type {
+        resp = resp.header("Content-Type", ct);
+    }
+    if let Some(ref etag) = file.etag {
+        resp = resp.header("ETag", etag);
+    }
+    let resp = resp.body(body).unwrap();
+
+    assert!(
+        resp.headers().get("content-type").is_some(),
+        "HTTP response must contain Content-Type header, headers: {:?}",
+        resp.headers()
+    );
+}
+
+#[tokio::test]
+async fn test_cache_hit_without_content_type_triggers_reprobe() {
+    let total = CHUNK_SIZE * 2 + 123;
+    let test_data: Vec<u8> = (0..total)
+        .map(|i| (i as u8).wrapping_mul(17).wrapping_add(73))
+        .collect();
+
+    let state = MockState {
+        get_count: Arc::new(AtomicU32::new(0)),
+        head_count: Arc::new(AtomicU32::new(0)),
+        test_data: Arc::new(test_data.clone()),
+    };
+
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head(mock_redirect_head).get(mock_get),
+        )
+        .route("/cdn/{*path}", head(mock_head).get(mock_get))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+
+    let head_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let http_client = reqwest::Client::new();
+
+    let service = Arc::new(CacheService::new(
+        metadata.clone(),
+        backend.clone(),
+        None,
+        http_client,
+        head_client,
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+        5,
+        3,
+    ));
+
+    let upstream_url = format!("http://{addr}/test/repo/resolve/main/large.bin");
+
+    // First, download the file AND then clear content_type from DB
+    // to simulate an old cached file without content_type
+    let _ = service
+        .stream_from_upstream(
+            &upstream_url,
+            "large.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    // Verify it was stored with content_type initially
+    let file = metadata
+        .get_file_by_name("large.bin", "hf")
+        .unwrap()
+        .unwrap();
+    assert!(
+        file.content_type.is_some(),
+        "initial store must have content_type"
+    );
+
+    // Manually clear content_type in DB to simulate headerless bugs
+    {
+        let conn = metadata.raw_conn().unwrap();
+        conn.execute(
+            "UPDATE files SET content_type = NULL WHERE name = 'large.bin' AND source = 'hf'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let file_after = metadata
+        .get_file_by_name("large.bin", "hf")
+        .unwrap()
+        .unwrap();
+    assert!(
+        file_after.content_type.is_none(),
+        "content_type must be NULL after manual clear"
+    );
+
+    // Now download again — shoud re-probe (because content_type is missing)
+    let (file, _content_length, stream) = service
+        .stream_from_upstream(
+            &upstream_url,
+            "large.bin",
+            "test/repo",
+            "hf",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        file.content_type.is_some(),
+        "after re-probe, content_type must be restored"
+    );
+
+    use futures_util::StreamExt;
+    let mut stream = stream;
+    let mut collected = Vec::new();
+    while let Some(result) = stream.next().await {
+        collected.extend_from_slice(&result.unwrap());
+    }
+    assert_eq!(collected, test_data);
+}

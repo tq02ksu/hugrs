@@ -686,9 +686,9 @@ async fn file_proxy_inner(
         }
     }
 
-    // Serve from cache if complete and range valid (unless etag was invalidated)
+    // Serve from cache if complete, range valid, and headers present
     if let Some(ref file) = cached_file {
-        if !etag_invalid && !range_stale {
+        if !etag_invalid && !range_stale && file.content_type.is_some() {
             tracing::debug!("GET cache hit (streaming): {}", cache_name);
             let (file, content_length, stream) = service
                 .stream_http_file(
@@ -707,9 +707,10 @@ async fn file_proxy_inner(
             return build_stream_response(file, content_length, stream, &path, range);
         }
         tracing::debug!(
-            "GET cache not served (invalid={}, stale={}), refreshing: {}",
+            "GET cache not served (invalid={}, stale={}, no_ct={}), refreshing: {}",
             etag_invalid,
             range_stale,
+            file.content_type.is_none(),
             cache_name
         );
     }
