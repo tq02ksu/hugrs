@@ -24,6 +24,8 @@ jobs:
 
       - if: matrix.language == 'rust'
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src
 
       - if: matrix.language == 'rust'
         uses: Swatinem/rust-cache@v2
