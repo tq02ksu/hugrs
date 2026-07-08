@@ -15,6 +15,11 @@ pub(crate) fn use_get_for_first_hop_probe(source: &str, url: &str) -> bool {
     source == "ms" && url.contains("/api/v1/models/") && url.contains("/repo?")
 }
 
+pub struct EtagValidationOutcome {
+    pub matched: bool,
+    pub content_type: Option<String>,
+}
+
 fn etags_equivalent(lhs: Option<&str>, rhs: Option<&str>) -> bool {
     fn normalize(etag: &str) -> &str {
         etag.trim().trim_start_matches("W/").trim_matches('"')
@@ -785,18 +790,22 @@ impl CacheService {
         source: &str,
         user_agent: Option<&str>,
         cached_etag: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<EtagValidationOutcome> {
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(self.etag_validation_timeout),
             self.fetch_file_metadata(url, name, repo, source, user_agent),
         )
         .await
         .map_err(|_| anyhow::anyhow!("etag validation timed out"))?;
-        let (_size, upstream_etag, _ct, _commit, _xl_size, _xl_etag) = result?;
-        match upstream_etag {
-            Some(ref ue) => Ok(ue == cached_etag),
-            None => Ok(true),
-        }
+        let (_size, upstream_etag, content_type, _commit, _xl_size, _xl_etag) = result?;
+        let matched = match upstream_etag {
+            Some(ref ue) => ue == cached_etag,
+            None => true,
+        };
+        Ok(EtagValidationOutcome {
+            matched,
+            content_type,
+        })
     }
 
     pub async fn reconcile_file_metadata(
