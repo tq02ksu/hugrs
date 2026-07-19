@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1] - 2026-07-19
+
+### Fixed
+- Upgrade yanked `spin` dependencies (0.9.8→0.9.9, 0.10.0→0.10.1)
+- Fix RUSTSEC-2026-0204: crossbeam-epoch upgraded from 0.9.18 to 0.9.20
+- Dockerfile: add `apt-get upgrade -y` to patch trivy-detected OS-level CVEs
+
 ## [0.7.0] - 2026-07-05
 
 ### Changed
