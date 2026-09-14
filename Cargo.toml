@@ -39,7 +39,7 @@ futures-util = "0.3"
 tokio-stream = "0.1"
 dashmap = "6"
 dotenvy = "0.15"
-dirs = "6"
+dirs = "7"
 zstd = "0.13"
 rusqlite_migration = "2"
 figment = { version = "0.10", features = ["env", "toml", "test"] }
