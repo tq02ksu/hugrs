@@ -11,6 +11,21 @@ use tokio_stream::wrappers::ReceiverStream;
 
 pub const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
+pub fn file_is_complete(total_size: i64, chunks: &[crate::metadata::FileChunk]) -> bool {
+    if total_size <= 0 {
+        return false;
+    }
+    let total = total_size as u64;
+    let chunk_size = CHUNK_SIZE as u64;
+    let expected_count = total.div_ceil(chunk_size) as usize;
+    chunks.len() == expected_count
+        && chunks.iter().enumerate().all(|(i, chunk)| {
+            let start = i as u64 * chunk_size;
+            chunk.chunk_index as usize == i
+                && chunk.chunk_size == (total - start).min(chunk_size) as i64
+        })
+}
+
 pub(crate) fn use_get_for_first_hop_probe(source: &str, url: &str) -> bool {
     source == "ms" && url.contains("/api/v1/models/") && url.contains("/repo?")
 }
@@ -190,22 +205,7 @@ impl CacheService {
         let Ok(chunks) = self.metadata.get_file_chunks(file.id) else {
             return false;
         };
-        if file.total_size <= 0 {
-            return false;
-        }
-        let expected_count = (file.total_size as usize).div_ceil(CHUNK_SIZE);
-        if chunks.len() != expected_count {
-            return false;
-        }
-        let last_len = file.total_size - (expected_count as i64 - 1) * CHUNK_SIZE as i64;
-        chunks.iter().enumerate().all(|(i, chunk)| {
-            let expected_len = if i + 1 == expected_count {
-                last_len
-            } else {
-                CHUNK_SIZE as i64
-            };
-            chunk.chunk_index as usize == i && chunk.chunk_size == expected_len
-        })
+        file_is_complete(file.total_size, &chunks)
     }
 
     pub async fn info(&self, name: &str, source: &str) -> anyhow::Result<Option<File>> {

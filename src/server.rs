@@ -991,7 +991,12 @@ fn aggregate_files(
                 sources: entries.iter().map(|f| f.source.clone()).collect(),
                 size: first.total_size,
                 downloaded_size,
-                complete: downloaded_size >= first.total_size,
+                complete: entries.iter().any(|entry| {
+                    metadata
+                        .get_file_chunks(entry.id)
+                        .map(|chunks| crate::service::file_is_complete(entry.total_size, &chunks))
+                        .unwrap_or(false)
+                }),
                 content_type: first.content_type.clone(),
                 last_accessed: entries
                     .iter()
@@ -1273,7 +1278,14 @@ async fn control_file_show(
         sources,
         size: first.total_size,
         downloaded_size,
-        complete: downloaded_size >= first.total_size,
+        complete: crate::service::file_is_complete(
+            first.total_size,
+            &state
+                .service
+                .metadata
+                .get_file_chunks(first.id)
+                .map_err(AppError::Anyhow)?,
+        ),
         content_type: first.content_type.clone(),
         last_accessed: first.last_accessed.clone(),
     }))

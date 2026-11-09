@@ -549,3 +549,55 @@ async fn test_legacy_oversized_chunk_is_not_complete() {
         "chunk layout must match the 4 MiB grid before serving from cache"
     );
 }
+
+fn file_chunk(chunk_index: i64, chunk_size: i64) -> hugrs::metadata::FileChunk {
+    hugrs::metadata::FileChunk {
+        file_id: 1,
+        sha256: format!("sha{chunk_index}"),
+        chunk_index,
+        chunk_size,
+    }
+}
+
+#[test]
+fn file_is_complete_accepts_exact_chunk_layout() {
+    let total = CHUNK_SIZE as i64 * 2 + 100;
+    let chunks = vec![
+        file_chunk(0, CHUNK_SIZE as i64),
+        file_chunk(1, CHUNK_SIZE as i64),
+        file_chunk(2, 100),
+    ];
+    assert!(hugrs::service::file_is_complete(total, &chunks));
+}
+
+#[test]
+fn file_is_complete_rejects_duplicated_full_size_chunks() {
+    let total = CHUNK_SIZE as i64 + 100;
+    let chunks = vec![file_chunk(0, total), file_chunk(1, total)];
+    assert!(!hugrs::service::file_is_complete(total, &chunks));
+}
+
+#[test]
+fn file_is_complete_rejects_index_gap() {
+    let total = CHUNK_SIZE as i64 * 2;
+    let chunks = vec![
+        file_chunk(0, CHUNK_SIZE as i64),
+        file_chunk(2, CHUNK_SIZE as i64),
+    ];
+    assert!(!hugrs::service::file_is_complete(total, &chunks));
+}
+
+#[test]
+fn file_is_complete_rejects_missing_tail() {
+    let total = CHUNK_SIZE as i64 * 2 + 100;
+    let chunks = vec![
+        file_chunk(0, CHUNK_SIZE as i64),
+        file_chunk(1, CHUNK_SIZE as i64),
+    ];
+    assert!(!hugrs::service::file_is_complete(total, &chunks));
+}
+
+#[test]
+fn file_is_complete_rejects_non_positive_size() {
+    assert!(!hugrs::service::file_is_complete(0, &[]));
+}
