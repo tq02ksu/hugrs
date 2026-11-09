@@ -191,6 +191,7 @@ impl SessionTable {
                         cached_chunks,
                     )
                     .await;
+                map.remove(&key);
                 match result {
                     Ok(data) => {
                         let _ = tx.send(Ok(Arc::new(data)));
@@ -200,7 +201,6 @@ impl SessionTable {
                         let _ = tx.send(Err(Arc::new(e.to_string())));
                     }
                 };
-                map.remove(&key);
             });
             Arc::new(ChunkSession {
                 tx: tx2,
@@ -222,6 +222,18 @@ impl ChunkReader {
             Err(_) => return Ok(None),
         };
 
+        if let Some(expected) = expected_chunk_size {
+            if raw.len() != expected {
+                tracing::error!(
+                    "cached chunk size mismatch: len={} expected={}",
+                    raw.len(),
+                    expected
+                );
+                let _ = self.backend.delete(sha256).await;
+                return Ok(None);
+            }
+        }
+
         if !self.verify_sha256 {
             return Ok(Some(Bytes::from(raw)));
         }
@@ -234,17 +246,6 @@ impl ChunkReader {
         .map_err(|e| anyhow::anyhow!("sha256 panicked: {e}"))?;
 
         if actual == sha256 {
-            if let Some(expected) = expected_chunk_size {
-                if raw.len() != expected {
-                    tracing::error!(
-                        "chunk size mismatch: sha256 matches but len={} != expected={}",
-                        raw.len(),
-                        expected
-                    );
-                    let _ = self.backend.delete(sha256).await;
-                    return Ok(None);
-                }
-            }
             return Ok(Some(Bytes::from(raw)));
         }
 
@@ -643,6 +644,16 @@ impl FileSessionActor {
 
         match rx.recv().await {
             Ok(Ok(data)) => {
+                let expected_len = (end - start + 1) as usize;
+                if data.len() != expected_len {
+                    let msg = format!(
+                        "chunk {idx} size mismatch: got {} expected {expected_len}",
+                        data.len()
+                    );
+                    self.forward_error(anyhow::anyhow!("{msg}")).await;
+                    return Err(anyhow::anyhow!(msg));
+                }
+
                 let elapsed_ms = chunk_start.elapsed().as_millis();
 
                 self.forward_chunk(start, &data).await;
@@ -1367,6 +1378,65 @@ mod tests {
             verify_sha256: false,
             chunk_retries,
             write_locks: DashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_cached_chunk_rejects_wrong_size_without_verification() {
+        let dir = TempDir::new().unwrap();
+        let reader = chunk_reader(&dir, 3);
+        let stored = vec![3u8; 100];
+        let sha = crate::chunker::sha256_hex(&stored);
+        reader.backend.put(&sha, &stored).await.unwrap();
+
+        let got = reader.read_cached_chunk(&sha, Some(4096)).await.unwrap();
+
+        assert!(got.is_none(), "wrong-sized chunk must not be served");
+        assert!(
+            !reader.backend.exists(&sha).await.unwrap(),
+            "wrong-sized chunk must be evicted from storage"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscribe_after_chunk_stored_serves_from_cache() {
+        let dir = TempDir::new().unwrap();
+        let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let backend: Arc<dyn StorageBackend> = Arc::new(crate::storage::local::LocalBackend::new(
+            dir.path().join("chunks"),
+            crate::storage::Compression::None,
+        ));
+        let table = SessionTable::new(
+            reqwest::Client::new(),
+            backend,
+            event_tx,
+            Arc::new(AtomicU64::new(0)),
+            true,
+            1,
+        );
+
+        let data = vec![0x5Au8; CHUNK_SIZE];
+        let sha = crate::chunker::sha256_hex(&data);
+        table.reader.backend.put(&sha, &data).await.unwrap();
+        let cached = Arc::new(StdMutex::new(HashMap::from([(0usize, sha)])));
+
+        for _ in 0..2 {
+            let mut rx = table
+                .subscribe(
+                    1,
+                    0,
+                    "http://127.0.0.1:1/never",
+                    0,
+                    CHUNK_SIZE as u64 - 1,
+                    CHUNK_SIZE as u64,
+                    1,
+                    None,
+                    &cached,
+                )
+                .await
+                .unwrap();
+            let received = rx.recv().await.unwrap().unwrap();
+            assert_eq!(received.as_ref(), data.as_slice());
         }
     }
 

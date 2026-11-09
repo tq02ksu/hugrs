@@ -1347,3 +1347,118 @@ async fn test_concurrent_streams_of_same_file_are_identical() {
         "late subscriber must receive the whole file, not a shifted window"
     );
 }
+
+/// hf_transfer-style concurrency: eight unaligned ranges of the same fully
+/// cached file must each contain exactly their requested byte slice.
+#[tokio::test]
+async fn test_concurrent_range_requests_match_their_slices() {
+    let total = CHUNK_SIZE * 7 + 321;
+    let test_data: Vec<u8> = (0..total)
+        .map(|i| (i as u8).wrapping_mul(31).wrapping_add(5))
+        .collect();
+    let state = MockState {
+        get_count: Arc::new(AtomicU32::new(0)),
+        head_count: Arc::new(AtomicU32::new(0)),
+        test_data: Arc::new(test_data.clone()),
+    };
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head(mock_head).get(mock_get),
+        )
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let head_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let service = Arc::new(CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        head_client,
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+        5,
+        3,
+    ));
+
+    let url = format!("http://{addr}/test/repo/resolve/main/ranges.bin");
+    use futures_util::StreamExt;
+
+    // Warm the file completely so the concurrent requests below only read
+    // from storage, matching the reported clean-cache reproduction.
+    let (_, _, warm) = service
+        .stream_from_upstream(&url, "ranges.bin", "test/repo", "hf", None, None, None)
+        .await
+        .unwrap();
+    let mut warm = warm;
+    let mut warmed = Vec::new();
+    while let Some(result) = warm.next().await {
+        warmed.extend_from_slice(&result.unwrap());
+    }
+    assert_eq!(warmed, test_data);
+    drop(warm);
+
+    let total = total as u64;
+    let boundaries: Vec<(u64, u64)> = vec![
+        (0, total / 8),
+        (total / 8 + 1, total / 4),
+        (total / 4 + 17, total * 3 / 8),
+        (total * 3 / 8 + 1, total / 2),
+        (total / 2 + 3, total * 5 / 8),
+        (total * 5 / 8 + 1, total * 3 / 4),
+        (total * 3 / 4 + 9, total * 7 / 8),
+        (total * 7 / 8 + 1, total - 1),
+    ];
+
+    let mut tasks = Vec::new();
+    for (start, end) in boundaries {
+        let service = service.clone();
+        let url = url.clone();
+        tasks.push(tokio::spawn(async move {
+            let (_, len, mut stream) = service
+                .stream_from_upstream(
+                    &url,
+                    "ranges.bin",
+                    "test/repo",
+                    "hf",
+                    Some(start),
+                    Some(end),
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(len, end - start + 1);
+            let mut body = Vec::new();
+            while let Some(item) = stream.next().await {
+                body.extend_from_slice(&item.unwrap());
+            }
+            (start, end, body)
+        }));
+    }
+
+    for task in tasks {
+        let (start, end, body) = task.await.unwrap();
+        assert_eq!(
+            body,
+            test_data[start as usize..=end as usize],
+            "range {start}-{end} mismatch"
+        );
+    }
+}
