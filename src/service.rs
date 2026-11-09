@@ -179,12 +179,33 @@ impl CacheService {
             Some(f) => f,
             None => return Ok(None),
         };
-        let downloaded = self.metadata.get_file_downloaded_size(file.id)?;
-        if downloaded >= file.total_size {
-            Ok(Some(file))
-        } else {
-            Ok(None)
+        Ok(self.is_complete(&file).then_some(file))
+    }
+
+    /// A cached file is only servable when its chunk layout is exactly the
+    /// expected 4 MiB grid. Checking the sum alone accepts corrupt layouts
+    /// whose chunks are too large (e.g. legacy full-file-on-range entries),
+    /// which used to be streamed with a mismatched Content-Length.
+    fn is_complete(&self, file: &File) -> bool {
+        let Ok(chunks) = self.metadata.get_file_chunks(file.id) else {
+            return false;
+        };
+        if file.total_size <= 0 {
+            return false;
         }
+        let expected_count = (file.total_size as usize).div_ceil(CHUNK_SIZE);
+        if chunks.len() != expected_count {
+            return false;
+        }
+        let last_len = file.total_size - (expected_count as i64 - 1) * CHUNK_SIZE as i64;
+        chunks.iter().enumerate().all(|(i, chunk)| {
+            let expected_len = if i + 1 == expected_count {
+                last_len
+            } else {
+                CHUNK_SIZE as i64
+            };
+            chunk.chunk_index as usize == i && chunk.chunk_size == expected_len
+        })
     }
 
     pub async fn info(&self, name: &str, source: &str) -> anyhow::Result<Option<File>> {

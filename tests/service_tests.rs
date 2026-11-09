@@ -498,3 +498,54 @@ async fn test_gc_execute_batch_limits_one_server_side_batch() {
     let remaining = metadata.get_orphan_chunks().unwrap();
     assert_eq!(remaining.len(), 8);
 }
+
+#[tokio::test]
+async fn test_legacy_oversized_chunk_is_not_complete() {
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let service = CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        reqwest::Client::new(),
+        0,
+        8,
+        true,
+        reqwest::Client::new(),
+        5,
+        3,
+    );
+
+    let data = vec![0x42u8; CHUNK_SIZE + 100];
+    seed_file(&service, "legacy/model.bin", "legacy", "hf", &data).await;
+    assert!(service
+        .is_file_complete("legacy/model.bin", "hf")
+        .await
+        .unwrap());
+
+    // Simulate a cache entry written by the old "upstream ignored Range and
+    // returned the whole file" path: chunk 0 claims to hold the full file.
+    {
+        let conn = service.metadata.raw_conn().unwrap();
+        conn.execute(
+            "UPDATE file_chunks SET chunk_size = ?1
+             WHERE chunk_index = 0
+               AND file_id = (SELECT id FROM files WHERE name = 'legacy/model.bin')",
+            [data.len() as i64],
+        )
+        .unwrap();
+    }
+
+    assert!(
+        !service
+            .is_file_complete("legacy/model.bin", "hf")
+            .await
+            .unwrap(),
+        "chunk layout must match the 4 MiB grid before serving from cache"
+    );
+}

@@ -1187,3 +1187,163 @@ async fn test_cache_hit_without_content_type_triggers_reprobe() {
     }
     assert_eq!(collected, test_data);
 }
+
+/// Two clients downloading the same file at overlapping times must both get
+/// the exact bytes. Chunks already fetched for the first client used to be
+/// skipped for the second one, which shifted/truncated its stream while the
+/// response still declared the full Content-Length.
+#[tokio::test]
+async fn test_concurrent_streams_of_same_file_are_identical() {
+    #[derive(Clone)]
+    struct GateState {
+        data: Arc<Vec<u8>>,
+        started: Arc<tokio::sync::Semaphore>,
+        release: Arc<tokio::sync::Semaphore>,
+        gated: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    async fn gate_head(State(state): State<GateState>) -> Response {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Length", state.data.len())
+            .header("ETag", r#""gate-etag""#)
+            .header("X-Repo-Commit", "gatecommit")
+            .header("X-Linked-Size", state.data.len() as i64)
+            .header("X-Linked-ETag", r#""gate-linked-etag""#)
+            .header("Content-Type", "application/octet-stream")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    async fn gate_get(
+        State(state): State<GateState>,
+        headers: HeaderMap,
+    ) -> Result<Response, (StatusCode, String)> {
+        let total = state.data.len() as u64;
+        let (start, end) = match headers.get("range") {
+            Some(range) => {
+                let range = range.to_str().unwrap().strip_prefix("bytes=").unwrap();
+                let (s, e) = range.split_once('-').unwrap();
+                let start: u64 = s.parse().unwrap();
+                let end: u64 = if e.is_empty() {
+                    total - 1
+                } else {
+                    e.parse().unwrap()
+                };
+                (start, end)
+            }
+            None => (0, total - 1),
+        };
+        // Block the fetch of chunk 1 until the test has attached a second
+        // client to the same in-flight session.
+        if start == CHUNK_SIZE as u64
+            && !state.gated.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            state.started.add_permits(1);
+            let permit = state.release.acquire().await.unwrap();
+            permit.forget();
+        }
+        let data = &state.data[start as usize..=end as usize];
+        Ok(Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header("Content-Length", data.len())
+            .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+            .body(axum::body::Body::from(data.to_vec()))
+            .unwrap())
+    }
+
+    let total = CHUNK_SIZE * 4 + 123;
+    let test_data: Vec<u8> = (0..total)
+        .map(|i| (i as u8).wrapping_mul(3).wrapping_add(29))
+        .collect();
+    let gated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = Arc::new(tokio::sync::Semaphore::new(0));
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let state = GateState {
+        data: Arc::new(test_data.clone()),
+        started: started.clone(),
+        release: release.clone(),
+        gated,
+    };
+    let app = Router::new()
+        .route(
+            "/{org}/{repo}/resolve/{revision}/{*path}",
+            head(gate_head).get(gate_get),
+        )
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let dir = TempDir::new().unwrap();
+    let metadata = Arc::new(MetadataStore::new(&dir.path().join("test.db")).unwrap());
+    let backend: Arc<dyn hugrs::storage::StorageBackend> = Arc::new(LocalBackend::new(
+        dir.path().join("chunks"),
+        Compression::None,
+    ));
+    let head_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let service = Arc::new(CacheService::new(
+        metadata,
+        backend,
+        None,
+        reqwest::Client::new(),
+        head_client,
+        0,
+        1,
+        true,
+        reqwest::Client::new(),
+        5,
+        3,
+    ));
+
+    let url = format!("http://{addr}/test/repo/resolve/main/concurrent.bin");
+    use futures_util::StreamExt;
+
+    let (_, _, first) = service
+        .stream_from_upstream(&url, "concurrent.bin", "test/repo", "hf", None, None, None)
+        .await
+        .unwrap();
+    let first_task = tokio::spawn(async move {
+        let mut collected = Vec::new();
+        let mut first = first;
+        while let Some(result) = first.next().await {
+            collected.extend_from_slice(&result.unwrap());
+        }
+        collected
+    });
+
+    // Chunk 0 has been served and chunk 1 is in flight: attach the second
+    // client now, then let the download proceed.
+    let permit = started.acquire().await.unwrap();
+    permit.forget();
+    let (_, _, second) = service
+        .stream_from_upstream(&url, "concurrent.bin", "test/repo", "hf", None, None, None)
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    release.add_permits(1);
+
+    let mut second = second;
+    let mut second_collected = Vec::new();
+    while let Some(result) = second.next().await {
+        second_collected.extend_from_slice(&result.unwrap());
+    }
+    let first_collected = first_task.await.unwrap();
+
+    assert_eq!(first_collected, test_data);
+    let mismatch = second_collected
+        .iter()
+        .zip(test_data.iter())
+        .position(|(a, b)| a != b);
+    assert_eq!(
+        (second_collected.len(), mismatch),
+        (test_data.len(), None),
+        "late subscriber must receive the whole file, not a shifted window"
+    );
+}

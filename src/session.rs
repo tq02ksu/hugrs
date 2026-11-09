@@ -14,7 +14,44 @@ pub const CHUNK_SIZE: usize = crate::service::CHUNK_SIZE;
 
 type ChunkMessage = Result<Arc<Bytes>, Arc<String>>;
 
-type SubscriberEntry = (u64, u64, mpsc::Sender<Result<Bytes, anyhow::Error>>);
+struct Subscriber {
+    start: u64,
+    end: u64,
+    tx: mpsc::Sender<Result<Bytes, anyhow::Error>>,
+    /// Next chunk index this subscriber still needs. Chunks before it were
+    /// already delivered (or lie before its range start).
+    next: usize,
+}
+
+impl Subscriber {
+    fn new(start: u64, end: u64, tx: mpsc::Sender<Result<Bytes, anyhow::Error>>) -> Self {
+        Self {
+            start,
+            end,
+            tx,
+            next: (start / CHUNK_SIZE as u64) as usize,
+        }
+    }
+
+    fn last_chunk(&self, chunk_count: usize) -> usize {
+        ((self.end / CHUNK_SIZE as u64) as usize).min(chunk_count.saturating_sub(1))
+    }
+
+    fn finished(&self, chunk_count: usize) -> bool {
+        self.next > self.last_chunk(chunk_count)
+    }
+}
+
+fn chunk_bounds(idx: usize, total_size: u64) -> (u64, u64) {
+    let start = idx as u64 * CHUNK_SIZE as u64;
+    let end = (start + CHUNK_SIZE as u64 - 1).min(total_size.saturating_sub(1));
+    (start, end)
+}
+
+fn expected_chunk_len(idx: usize, total_size: u64) -> usize {
+    let (start, end) = chunk_bounds(idx, total_size);
+    (end - start + 1) as usize
+}
 
 trait LockExt<T> {
     fn lock_or_recover(&self) -> MutexGuard<'_, T>;
@@ -467,7 +504,7 @@ struct FileSessionActor {
     session_table: Arc<SessionTable>,
     served_bytes: Arc<AtomicU64>,
     // Mutable state (owned by actor — no locks)
-    subscribers: Vec<SubscriberEntry>,
+    subscribers: Vec<Subscriber>,
     completed: HashSet<usize>,
     prefetch_inflight: HashSet<usize>,
     cached_chunks: Arc<StdMutex<HashMap<usize, String>>>,
@@ -534,7 +571,8 @@ impl FileSessionActor {
             while let Ok(msg) = self.mailbox_rx.try_recv() {
                 match msg {
                     SessionMessage::Subscribe { reply, file, range } => {
-                        self.subscribers.push((range.0, range.1, reply));
+                        self.subscribers
+                            .push(Subscriber::new(range.0, range.1, reply));
                         let _ = file;
                     }
                     SessionMessage::TickBackpressure => {}
@@ -544,8 +582,16 @@ impl FileSessionActor {
             self.clean_subscribers();
             self.cleanup_prefetches();
 
-            if self.subscribers.is_empty() && self.prefetch_inflight.is_empty() {
+            if self.subscribers.is_empty() {
                 break;
+            }
+
+            // A subscriber that attached while chunks were already downloaded
+            // never received them. Replay such chunks from storage before
+            // continuing with new downloads, so every subscriber observes its
+            // range in order from its first chunk.
+            if self.replay_completed_chunk().await {
+                continue;
             }
 
             if let Some(idx) = self.select_next_chunk() {
@@ -557,8 +603,6 @@ impl FileSessionActor {
                 }
                 self.schedule_prefetches();
             } else {
-                // All chunks in every subscriber's range are already completed.
-                self.subscribers.clear();
                 break;
             }
         }
@@ -703,16 +747,12 @@ impl FileSessionActor {
 
     fn compute_active_cursors(&self) -> Vec<usize> {
         let mut cursors = Vec::new();
-        let max_idx = self.chunk_count.saturating_sub(1);
-        let chunk_sz = CHUNK_SIZE as u64;
-
-        for (start, end, _) in &self.subscribers {
-            let first = (*start / chunk_sz) as usize;
-            let last = ((*end / chunk_sz) as usize).min(max_idx);
-            if let Some(next) = (first..=last)
-                .find(|idx| !self.completed.contains(idx) && !self.prefetch_inflight.contains(idx))
-            {
-                cursors.push(next);
+        for sub in &self.subscribers {
+            if sub.finished(self.chunk_count) {
+                continue;
+            }
+            if !self.completed.contains(&sub.next) && !self.prefetch_inflight.contains(&sub.next) {
+                cursors.push(sub.next);
             }
         }
 
@@ -722,36 +762,14 @@ impl FileSessionActor {
     }
 
     fn select_next_chunk(&self) -> Option<usize> {
-        let chunk_sz = CHUNK_SIZE as u64;
-        let mut best: Option<(usize, f64)> = None;
-
-        for (start, end, _) in &self.subscribers {
-            let first_chunk = (*start / chunk_sz) as usize;
-            let last_chunk = ((*end / chunk_sz) as usize).min(self.chunk_count.saturating_sub(1));
-            let range_len = (*end - *start).max(1) as f64;
-
-            for idx in first_chunk..=last_chunk {
-                if self.completed.contains(&idx) {
-                    continue;
-                }
-                let chunk_byte_start = idx as u64 * chunk_sz;
-                let distance = if chunk_byte_start >= *start {
-                    (chunk_byte_start - *start) as f64
-                } else {
-                    0.0
-                };
-                let urgency = distance / range_len;
-                let is_better = match best {
-                    Some((_, best_urgency)) => urgency < best_urgency,
-                    None => true,
-                };
-                if is_better {
-                    best = Some((idx, urgency));
-                }
-            }
-        }
-
-        best.map(|(idx, _)| idx)
+        // Every subscriber must observe its own range in order: the only
+        // chunk it can accept next is `next`. Pick the smallest pending index
+        // across subscribers to keep the shared download cursor fair.
+        self.subscribers
+            .iter()
+            .filter(|sub| !self.completed.contains(&sub.next))
+            .map(|sub| sub.next)
+            .min()
     }
 
     fn cleanup_prefetches(&mut self) {
@@ -760,37 +778,84 @@ impl FileSessionActor {
             .retain(|idx| !self.completed.contains(idx) && !cached.contains_key(idx));
     }
 
-    async fn forward_chunk(&self, chunk_start: u64, data: &Arc<Bytes>) {
+    async fn forward_chunk(&mut self, chunk_start: u64, data: &Arc<Bytes>) {
+        let idx = (chunk_start / CHUNK_SIZE as u64) as usize;
         let chunk_end = chunk_start + data.len() as u64 - 1;
-        for (s, e, tx) in &self.subscribers {
-            if chunk_end < *s || chunk_start > *e {
+        for sub in self.subscribers.iter_mut() {
+            if sub.next != idx {
                 continue;
             }
-            let sl_start = if *s > chunk_start {
-                (*s - chunk_start) as usize
-            } else {
-                0
-            };
-            let sl_end = if *e < chunk_end {
-                (*e - chunk_start + 1) as usize
-            } else {
-                data.len()
-            };
-            let slice = Bytes::copy_from_slice(&data[sl_start..sl_end]);
-            if tx.send(Ok(slice)).await.is_err() {}
+            let slice = slice_for(sub.start, sub.end, chunk_start, chunk_end, data);
+            let _ = sub.tx.send(Ok(slice)).await;
+            sub.next = idx + 1;
         }
+    }
+
+    /// Replay a chunk that is already downloaded but not yet delivered to a
+    /// subscriber that attached later. This is what keeps concurrent or
+    /// resumable requests byte-identical to a fresh download.
+    async fn replay_completed_chunk(&mut self) -> bool {
+        let target = self
+            .subscribers
+            .iter()
+            .position(|sub| self.completed.contains(&sub.next));
+        let Some(si) = target else {
+            return false;
+        };
+        let idx = self.subscribers[si].next;
+        let sha = self.cached_chunks.lock_or_recover().get(&idx).cloned();
+        if let Some(sha) = sha {
+            let expected = expected_chunk_len(idx, self.total_size);
+            if let Ok(Some(data)) = self
+                .session_table
+                .reader
+                .read_cached_chunk(&sha, Some(expected))
+                .await
+            {
+                let (chunk_start, chunk_end) = chunk_bounds(idx, self.total_size);
+                let sub = &mut self.subscribers[si];
+                let slice = slice_for(sub.start, sub.end, chunk_start, chunk_end, &data);
+                let delivered = slice.len();
+                let _ = sub.tx.send(Ok(slice)).await;
+                sub.next = idx + 1;
+                self.served_bytes
+                    .fetch_add(delivered as u64, Ordering::Relaxed);
+                return true;
+            }
+        }
+        // Storage lost the chunk (or it failed verification): forget it so the
+        // normal download path fetches it again.
+        self.completed.remove(&idx);
+        self.cached_chunks.lock_or_recover().remove(&idx);
+        false
     }
 
     async fn forward_error(&self, err: anyhow::Error) {
         let message = err.to_string();
-        for (_, _, tx) in &self.subscribers {
-            let _ = tx.send(Err(anyhow::anyhow!(message.clone()))).await;
+        for sub in &self.subscribers {
+            let _ = sub.tx.send(Err(anyhow::anyhow!(message.clone()))).await;
         }
     }
 
     fn clean_subscribers(&mut self) {
-        self.subscribers.retain(|(_, _, tx)| !tx.is_closed());
+        let chunk_count = self.chunk_count;
+        self.subscribers
+            .retain(|sub| !sub.tx.is_closed() && !sub.finished(chunk_count));
     }
+}
+
+fn slice_for(start: u64, end: u64, chunk_start: u64, chunk_end: u64, data: &[u8]) -> Bytes {
+    let sl_start = if start > chunk_start {
+        (start - chunk_start) as usize
+    } else {
+        0
+    };
+    let sl_end = if end < chunk_end {
+        (end - chunk_start + 1) as usize
+    } else {
+        data.len()
+    };
+    Bytes::copy_from_slice(&data[sl_start..sl_end])
 }
 
 // ── FileSessionManager ────────────────────────────────────────
@@ -856,7 +921,7 @@ impl FileSessionManager {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
-    use super::{prefetch_budget, FileSessionActor, LockExt, SessionTable, CHUNK_SIZE};
+    use super::{prefetch_budget, FileSessionActor, LockExt, SessionTable, Subscriber, CHUNK_SIZE};
     use crate::storage::StorageBackend;
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicU64;
@@ -915,18 +980,20 @@ mod tests {
     // ── select_next_chunk ─────────────────────────────────────
 
     #[test]
-    fn select_next_chunk_picks_closest_to_subscriber_start() {
+    fn select_next_chunk_returns_subscriber_cursor() {
         let mut actor = test_actor();
         actor.chunk_count = 10;
         let (tx, _rx) = tokio::sync::mpsc::channel(32);
 
-        actor
-            .subscribers
-            .push((CHUNK_SIZE as u64, 4 * CHUNK_SIZE as u64 - 1, tx));
+        actor.subscribers.push(Subscriber::new(
+            CHUNK_SIZE as u64,
+            4 * CHUNK_SIZE as u64 - 1,
+            tx,
+        ));
 
         assert_eq!(actor.select_next_chunk(), Some(1));
 
-        actor.completed.insert(1);
+        actor.subscribers[0].next = 2;
         assert_eq!(actor.select_next_chunk(), Some(2));
     }
 
@@ -935,7 +1002,9 @@ mod tests {
         let mut actor = test_actor();
         actor.chunk_count = 10;
         let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 9 * CHUNK_SIZE as u64 - 1, tx));
 
         for i in 0..10 {
             actor.completed.insert(i);
@@ -948,7 +1017,9 @@ mod tests {
         let mut actor = test_actor();
         actor.chunk_count = 10;
         let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 9 * CHUNK_SIZE as u64 - 1, tx));
 
         // Chunks 0 and 1 are being prefetched — select_next_chunk still picks them
         actor.prefetch_inflight.insert(0);
@@ -965,10 +1036,14 @@ mod tests {
         let (tx1, _rx1) = tokio::sync::mpsc::channel(32);
         let (tx2, _rx2) = tokio::sync::mpsc::channel(32);
 
-        actor.subscribers.push((0, 4 * CHUNK_SIZE as u64 - 1, tx1));
         actor
             .subscribers
-            .push((10 * CHUNK_SIZE as u64, 14 * CHUNK_SIZE as u64 - 1, tx2));
+            .push(Subscriber::new(0, 4 * CHUNK_SIZE as u64 - 1, tx1));
+        actor.subscribers.push(Subscriber::new(
+            10 * CHUNK_SIZE as u64,
+            14 * CHUNK_SIZE as u64 - 1,
+            tx2,
+        ));
 
         assert_eq!(actor.select_next_chunk(), Some(0));
 
@@ -981,21 +1056,25 @@ mod tests {
     // ── compute_active_cursors ────────────────────────────────
 
     #[test]
-    fn compute_active_cursors_finds_next_missing_for_each_subscriber() {
+    fn compute_active_cursors_uses_each_subscriber_cursor() {
         let mut actor = test_actor();
         actor.chunk_count = 10;
         let (tx1, _rx1) = tokio::sync::mpsc::channel(32);
         let (tx2, _rx2) = tokio::sync::mpsc::channel(32);
 
-        actor.subscribers.push((0, 4 * CHUNK_SIZE as u64 - 1, tx1));
         actor
             .subscribers
-            .push((6 * CHUNK_SIZE as u64, 9 * CHUNK_SIZE as u64 - 1, tx2));
+            .push(Subscriber::new(0, 4 * CHUNK_SIZE as u64 - 1, tx1));
+        actor.subscribers.push(Subscriber::new(
+            6 * CHUNK_SIZE as u64,
+            9 * CHUNK_SIZE as u64 - 1,
+            tx2,
+        ));
 
         let cursors = actor.compute_active_cursors();
         assert_eq!(cursors, vec![0, 6]);
 
-        actor.completed.insert(0);
+        actor.subscribers[0].next = 1;
         let cursors = actor.compute_active_cursors();
         assert_eq!(cursors, vec![1, 6]);
     }
@@ -1005,11 +1084,13 @@ mod tests {
         let mut actor = test_actor();
         actor.chunk_count = 10;
         let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 9 * CHUNK_SIZE as u64 - 1, tx));
 
         actor.prefetch_inflight.insert(0);
         let cursors = actor.compute_active_cursors();
-        assert_eq!(cursors, vec![1]);
+        assert!(cursors.is_empty());
     }
 
     // ── schedule_prefetches ────────────────────────────────────
@@ -1028,7 +1109,9 @@ mod tests {
         }
 
         let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 19 * CHUNK_SIZE as u64 - 1, tx));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 19 * CHUNK_SIZE as u64 - 1, tx));
 
         actor.schedule_prefetches();
 
@@ -1056,7 +1139,9 @@ mod tests {
         }
 
         let (tx, _rx) = tokio::sync::mpsc::channel(32);
-        actor.subscribers.push((0, 9 * CHUNK_SIZE as u64 - 1, tx));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 9 * CHUNK_SIZE as u64 - 1, tx));
 
         actor.schedule_prefetches();
 
@@ -1074,8 +1159,8 @@ mod tests {
         let (tx1, mut rx1) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
         let (tx2, mut rx2) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 
-        actor.subscribers.push((100, 299, tx1));
-        actor.subscribers.push((500, 799, tx2));
+        actor.subscribers.push(Subscriber::new(100, 299, tx1));
+        actor.subscribers.push(Subscriber::new(500, 799, tx2));
 
         let chunk_data = Arc::new(Bytes::from(vec![0u8; CHUNK_SIZE]));
         actor.forward_chunk(0, &chunk_data).await;
@@ -1092,14 +1177,139 @@ mod tests {
         let mut actor = test_actor();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
 
-        actor
-            .subscribers
-            .push((5 * CHUNK_SIZE as u64, 6 * CHUNK_SIZE as u64 - 1, tx));
+        actor.subscribers.push(Subscriber::new(
+            5 * CHUNK_SIZE as u64,
+            6 * CHUNK_SIZE as u64 - 1,
+            tx,
+        ));
 
         let chunk_data = Arc::new(Bytes::from(vec![0u8; CHUNK_SIZE]));
         actor.forward_chunk(0, &chunk_data).await;
 
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn forward_chunk_advances_each_subscriber_cursor() {
+        let mut actor = test_actor();
+        let (tx1, mut rx1) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+        let (tx2, mut rx2) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+
+        actor
+            .subscribers
+            .push(Subscriber::new(0, CHUNK_SIZE as u64 - 1, tx1));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 2 * CHUNK_SIZE as u64 - 1, tx2));
+
+        let chunk_data = Arc::new(Bytes::from(vec![7u8; CHUNK_SIZE]));
+        actor.forward_chunk(0, &chunk_data).await;
+
+        assert_eq!(rx1.recv().await.unwrap().unwrap().len(), CHUNK_SIZE);
+        assert_eq!(rx2.recv().await.unwrap().unwrap().len(), CHUNK_SIZE);
+        assert_eq!(actor.subscribers[0].next, 1);
+        assert_eq!(actor.subscribers[1].next, 1);
+
+        // Re-forwarding an already delivered chunk must not duplicate data.
+        actor.forward_chunk(0, &chunk_data).await;
+        assert!(rx1.try_recv().is_err());
+        assert!(rx2.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn replay_completed_chunk_serves_late_subscriber_from_storage() {
+        let mut actor = test_actor();
+        actor.chunk_count = 2;
+
+        let data = vec![0x5Au8; CHUNK_SIZE];
+        let sha = crate::chunker::sha256_hex(&data);
+        actor
+            .session_table
+            .reader
+            .backend
+            .put(&sha, &data)
+            .await
+            .unwrap();
+        actor.cached_chunks.lock_or_recover().insert(0, sha);
+        actor.completed.insert(0);
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+        actor
+            .subscribers
+            .push(Subscriber::new(0, CHUNK_SIZE as u64 - 1, tx));
+
+        assert!(actor.replay_completed_chunk().await);
+        let got = rx.recv().await.unwrap().unwrap();
+        assert_eq!(got.len(), CHUNK_SIZE);
+        assert_eq!(&got[..], &data[..]);
+        assert_eq!(actor.subscribers[0].next, 1);
+    }
+
+    #[tokio::test]
+    async fn replay_completed_chunk_forgets_missing_storage() {
+        let mut actor = test_actor();
+        actor.chunk_count = 2;
+        actor
+            .cached_chunks
+            .lock_or_recover()
+            .insert(0, "deadbeef".into());
+        actor.completed.insert(0);
+
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+        actor
+            .subscribers
+            .push(Subscriber::new(0, CHUNK_SIZE as u64 - 1, tx));
+
+        assert!(!actor.replay_completed_chunk().await);
+        assert!(!actor.completed.contains(&0));
+    }
+
+    /// Regression: a subscriber that attaches after some chunks were already
+    /// downloaded must still receive those chunks, in order and from the start
+    /// of its range. Before the per-subscriber cursor existed, the late stream
+    /// began mid-file (or was empty), producing sha256 mismatches for clients
+    /// that download the same file concurrently.
+    #[tokio::test]
+    async fn late_subscriber_receives_already_completed_chunks() {
+        let mut actor = test_actor();
+        actor.chunk_count = 2;
+
+        let data0 = vec![0x11u8; CHUNK_SIZE];
+        let data1 = vec![0x22u8; CHUNK_SIZE];
+        for (idx, data) in [&data0, &data1].into_iter().enumerate() {
+            let sha = crate::chunker::sha256_hex(data);
+            actor
+                .session_table
+                .reader
+                .backend
+                .put(&sha, data)
+                .await
+                .unwrap();
+            actor.cached_chunks.lock_or_recover().insert(idx, sha);
+        }
+        // Simulate a chunk 0 that was already downloaded for an earlier client.
+        actor.completed.insert(0);
+
+        let (tx1, mut rx1) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+        let (tx2, mut rx2) = tokio::sync::mpsc::channel::<Result<Bytes, anyhow::Error>>(32);
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 2 * CHUNK_SIZE as u64 - 1, tx1));
+        actor
+            .subscribers
+            .push(Subscriber::new(0, 2 * CHUNK_SIZE as u64 - 1, tx2));
+
+        actor.run().await;
+
+        for rx in [&mut rx1, &mut rx2] {
+            let mut got = Vec::new();
+            while let Some(item) = rx.recv().await {
+                got.extend_from_slice(&item.unwrap());
+            }
+            assert_eq!(got.len(), 2 * CHUNK_SIZE);
+            assert_eq!(&got[..CHUNK_SIZE], &data0[..]);
+            assert_eq!(&got[CHUNK_SIZE..], &data1[..]);
+        }
     }
 
     // ── fetch_chunk retry tests ──────────────────────────────
