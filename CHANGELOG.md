@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.2] - 2026-11-09
+
+### Fixed
+- Fixed concurrent stream corruption when multiple clients download the same file: each session subscriber now has its own chunk cursor, and late joiners replay already-downloaded chunks from storage, so responses are no longer shifted or truncated
+- Reject wrong-sized cached chunks regardless of SHA256 verification, and validate chunk length before forwarding to clients
+- Fixed a chunk handoff race between storage and the session broadcast that could abort active streams with `download closed unexpectedly`
+- Cache hits and control-plane `complete` status now require an exact chunk grid (count, contiguous indexes, per-chunk size); legacy oversized or duplicated chunk rows are no longer served or reported as complete
+
+### Security
+- Updated dependencies flagged by `cargo audit`: `crypto-bigint`, `ctutils`, `h2`, `quinn-proto`, `rustls`, `rustls-webpki`, `webpki-root-certs`, and the `zstd` stack
+
+### Changed
+- Refreshed compatible dependencies including `tokio`, `reqwest`, `clap`, `serde_json`, `futures-util`, `async-trait`, `tokio-stream`, and `tokio-test`
+
 ## [0.7.1] - 2026-07-19
 
 ### Fixed
