@@ -40,7 +40,7 @@ tokio-stream = "0.1"
 dashmap = "6"
 dotenvy = "0.15"
 dirs = "6"
-zstd = "0.13"
+zstd = "0.14"
 rusqlite_migration = "2"
 figment = { version = "0.10", features = ["env", "toml", "test"] }
 
